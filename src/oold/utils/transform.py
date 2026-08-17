@@ -186,6 +186,7 @@ def from_rdf(
     schemas: Iterable[dict[str, Any]],
     format: str = TURTLE,
     frame: dict[str, Any] | None = None,
+    set_id: str | None = None,
     options: dict[str, Any] | None = None,
 ) -> Any:
     """Read RDF back as an instance of the given schema chain.
@@ -194,9 +195,16 @@ def from_rdf(
     in any of the mapped vocabularies without naming a mapping set. A graph of several nodes
     is reconstructed by framing - compaction alone never re-nests a flat graph - using
     ``frame`` when given, otherwise the frame derived from the most derived schema.
+
+    ``set_id`` is only needed to bridge document *shapes*. Renaming a term is a rewrite of the
+    graph and needs no selection, but a promoted fragment may also carry ``@nest``, which
+    decides where in the document a value sits rather than what it means. ``@nest`` is a term
+    definition and only takes effect when the document is compacted against a context that
+    contains it, so a reading that regroups the document has to be named. See
+    https://github.com/OO-LD/oold-schema/issues/135.
     """
     schemas = list(schemas)
-    context = declared_context(schemas)
+    context = promote(declared_context(schemas), schemas, set_id)
 
     if isinstance(text, (dict, list)):
         nquads = jsonld.to_rdf(text, {"format": NQUADS})
@@ -207,7 +215,12 @@ def from_rdf(
     else:
         nquads = _dataset(text, "turtle").serialize(format="nquads")
 
-    nquads = _apply_rewrites(nquads, *_rewrite_map(schemas, context))
+    # Only one of the two mechanisms may act. Without a named set the synonyms are rewritten
+    # onto the primary IRIs and the declared context reads the result. With one, the promoted
+    # context already maps those IRIs - and carries the ``@nest`` that decides the shape - so
+    # rewriting first would move the predicates out from under it and lose both.
+    if set_id is None:
+        nquads = _apply_rewrites(nquads, *_rewrite_map(schemas, context))
     document = jsonld.from_rdf(nquads, {"format": NQUADS, "useNativeTypes": True})
 
     if frame is None and _is_graph_document(document) and schemas:

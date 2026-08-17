@@ -312,3 +312,132 @@ if __name__ == "__main__":
     test_simple_json(None)
     test_complex_graph(None)
     print(json.dumps({"ok": True}))
+
+
+# -- bridging document shapes (oold-schema#135) ------------------------------
+
+
+QUDT_SET = "https://w3id.org/oo-ld/schemas/mappings/qudt.sssom.tsv"
+
+
+def _nested_quantity_schema():
+    """The EMMO shape, where the number is a node, with its QUDT reading declared.
+
+    From https://github.com/OO-LD/oold-schema/issues/135. `value` maps to `@nest`, so under
+    the QUDT reading the JSON nesting carries no meaning; `numerical` maps to `qudt:value`
+    while staying nested under `value` in the document.
+    """
+    return _schema(
+        {
+            "emmo": "https://w3id.org/emmo#",
+            "qudt": "http://qudt.org/schema/qudt/",
+            "qunit": "http://qudt.org/vocab/unit/",
+            "type": {"@id": "@type", "@container": "@set"},
+            "value": "emmo:hasQuantityValuePart",
+            "numerical": "emmo:hasNumericalValue",
+            "unit": {"@id": "emmo:hasMeasurementUnit", "@type": "@vocab"},
+            "NestedQuantityValue": "emmo:QuantityValue",
+        },
+        {
+            "value": {
+                "@nest": {
+                    "x-oold-sssom": {
+                        "predicate_id": "skos:relatedMatch",
+                        "mapping_set_id": QUDT_SET,
+                    }
+                }
+            },
+            "numerical": {
+                "qudt:value": {
+                    "@nest": "value",
+                    "x-oold-sssom": {
+                        "predicate_id": "skos:exactMatch",
+                        "mapping_set_id": QUDT_SET,
+                    },
+                }
+            },
+        },
+        **{"x-oold-instance-rdf-type": ["emmo:QuantityValue"]},
+    )
+
+
+NESTED_INSTANCE = {
+    "@id": "https://example.org/m1",
+    "type": ["NestedQuantityValue"],
+    "value": {"numerical": 12.7},
+    "unit": "qunit:SEC",
+}
+
+FLAT_QUDT_GRAPH = (
+    "<https://example.org/m1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<http://qudt.org/schema/qudt/QuantityValue> .\n"
+    '<https://example.org/m1> <http://qudt.org/schema/qudt/value> "1.27E1"'
+    "^^<http://www.w3.org/2001/XMLSchema#double> .\n"
+    "<https://example.org/m1> <http://qudt.org/schema/qudt/hasUnit> "
+    "<http://qudt.org/vocab/unit/SEC> .\n"
+)
+
+NESTED_EMMO_GRAPH = (
+    "<https://example.org/m1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<https://w3id.org/emmo#QuantityValue> .\n"
+    "<https://example.org/m1> <https://w3id.org/emmo#hasMeasurementUnit> "
+    "<http://qudt.org/vocab/unit/SEC> .\n"
+    "<https://example.org/m1> <https://w3id.org/emmo#hasQuantityValuePart> _:b0 .\n"
+    '_:b0 <https://w3id.org/emmo#hasNumericalValue> "1.27E1"'
+    "^^<http://www.w3.org/2001/XMLSchema#double> .\n"
+)
+
+
+def test_a_promoted_nest_fragment_flattens_the_exported_graph():
+    """Reading B of the issue: the same document exports as a flat QUDT graph."""
+    schema = _nested_quantity_schema()
+
+    own = to_rdf(NESTED_INSTANCE, [schema], format=NQUADS)
+    promoted = to_rdf(NESTED_INSTANCE, [schema], set_id=QUDT_SET, format=NQUADS)
+
+    # Under its own context the number hangs off a node of its own.
+    assert "hasQuantityValuePart" in own
+    assert "_:" in own
+    # Under the QUDT reading it sits on the quantity, and no node remains.
+    assert "http://qudt.org/schema/qudt/value" in promoted
+    assert "hasQuantityValuePart" not in promoted
+    assert "_:" not in promoted
+    # Terms without a QUDT synonym keep their EMMO reading.
+    assert "hasMeasurementUnit" in promoted
+
+
+def test_selection_bridges_a_shape_on_import():
+    """Reading C: flat data compacts into the nested document the schema expects.
+
+    Naming the set is what makes this work. ``@nest`` is a term definition, so it only acts
+    when the document is compacted against a context that contains it - unlike renaming a
+    term, which is a rewrite of the graph and needs no selection.
+    """
+    schema = _nested_quantity_schema()
+
+    result = from_rdf(FLAT_QUDT_GRAPH, [schema], format=NQUADS, set_id=QUDT_SET)
+
+    assert result["value"] == {"numerical": 12.7}, result
+
+
+def test_without_a_set_the_shape_is_not_bridged():
+    """The boundary: vocabulary is bridged without a selection, shape is not."""
+    schema = _nested_quantity_schema()
+
+    result = from_rdf(FLAT_QUDT_GRAPH, [schema], format=NQUADS)
+
+    # qudt:value is an exactMatch synonym, so the term is recognised ...
+    assert result.get("numerical") == 12.7, result
+    # ... but it stays where the graph put it, on the quantity itself.
+    assert "value" not in result, result
+
+
+def test_framing_restores_the_shape_before_selection():
+    """Reading E: compaction alone returns a flat node list; the schema's frame re-nests it."""
+    schema = _nested_quantity_schema()
+
+    result = from_rdf(NESTED_EMMO_GRAPH, [schema], format=NQUADS)
+
+    assert result["value"] == {"numerical": 12.7}, result
+    assert result["type"] == ["NestedQuantityValue"], result
+    assert "@graph" not in result, "a framed document is one node, not a list"
