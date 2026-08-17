@@ -70,6 +70,16 @@ UI-jupyter = [
     "traitlets",
     "ipython",
 ]
+# The playground. Deliberately narrow: it imports oold.validation, oold.utils and
+# oold.ui.url_config only, never oold.model, so the whole app stays installable in a browser
+# (Pyodide) where datamodel-code-generator and sparqlwrapper are not worth their weight.
+playground = [
+    "panel",
+    "panelini",
+    "param",
+    "jsonschema>=4.20",
+    "referencing>=0.30",
+]
 UI-nicegui = [
     "nicegui",
 ]

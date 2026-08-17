@@ -28,6 +28,23 @@ validate: ## Validate the committed OO-LD fixtures with the built-in validator
 	@uv run oold validate tests/data/oold --offline
 	@uv run oold compliance tests/data/oold/compliance --offline
 
+.PHONY: playground
+playground: ## Serve the OO-LD playground locally
+	@echo "🚀 Serving the playground: panel serve"
+	@uv run panel serve examples/oold_playground.py --dev --show
+
+.PHONY: playground-wasm
+playground-wasm: ## Build the playground as a static browser (Pyodide) app in dist/
+	@echo "🚀 Building a wheel for the browser to install"
+	@uv build --wheel --out-dir dist/playground
+	@echo "🚀 Converting the playground to WebAssembly: panel convert"
+	@# The wheel is named explicitly rather than passing `oold[playground]`, which resolves to
+	@# the published release on PyPI and would ship the browser a package without this app in
+	@# it. Its dependencies are listed alongside because micropip installs a URL wheel without
+	@# consulting an index for the rest.
+	@uv run python scripts/build_playground_wasm.py
+	@echo "Serve it with: python -m http.server --directory dist/playground"
+
 .PHONY: check-extensions
 check-extensions: ## Check zensical.toml still restates Zensical's default Markdown extensions
 	@uv run python scripts/check_markdown_extensions.py
