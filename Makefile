@@ -45,6 +45,12 @@ playground-wasm: ## Build the playground as a static browser (Pyodide) app in di
 	@uv run python scripts/build_playground_wasm.py
 	@echo "Serve it with: python -m http.server --directory dist/playground"
 
+.PHONY: playground-wasm-check
+playground-wasm-check: ## Load the built browser app in a real browser and report what broke
+	@echo "🚀 Checking the WebAssembly build: playwright"
+	@uv run --with playwright python -m playwright install --with-deps chromium
+	@uv run --with playwright python scripts/check_wasm.py
+
 .PHONY: check-extensions
 check-extensions: ## Check zensical.toml still restates Zensical's default Markdown extensions
 	@uv run python scripts/check_markdown_extensions.py

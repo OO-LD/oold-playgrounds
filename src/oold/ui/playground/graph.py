@@ -46,25 +46,21 @@ def graph_data(nquads: str) -> dict[str, list[dict[str, Any]]]:
             elif isinstance(obj, URIRef) or hasattr(obj, "n3"):
                 target = str(obj)
                 resources.add(target)
-                edges.append(
-                    {
-                        "from": source,
-                        "to": target,
-                        "label": shorten(str(predicate)),
-                        "arrows": "to",
-                        "title": str(predicate),
-                    }
-                )
+                edges.append({
+                    "from": source,
+                    "to": target,
+                    "label": shorten(str(predicate)),
+                    "arrows": "to",
+                    "title": str(predicate),
+                })
 
     nodes = []
     for iri in sorted(resources):
         detail = literals.get(iri, [])
-        nodes.append(
-            {
-                "id": iri,
-                "label": shorten(iri),
-                "title": "\n".join([iri, *detail]),
-                "shape": "box" if detail else "ellipse",
-            }
-        )
+        nodes.append({
+            "id": iri,
+            "label": shorten(iri),
+            "title": "\n".join([iri, *detail]),
+            "shape": "box" if detail else "ellipse",
+        })
     return {"nodes": nodes, "edges": edges}

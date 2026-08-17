@@ -25,7 +25,7 @@ import logging
 import urllib.parse
 import zlib
 from enum import Enum
-from typing import Any, Dict, Generic, Type, TypeVar
+from typing import Any, Generic, TypeVar
 
 import panel as pn
 from pydantic import BaseModel
@@ -52,14 +52,14 @@ class UrlConfigMode(Enum):
     COMPRESSED_BASE64 = "compressed_base64"
 
 
-def _flatten_dict(data: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
+def _flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, str]:
     """Flatten a nested dict into dot-separated keys with JSON-encoded leaves.
 
     Lists use numeric indices (e.g. ``items.0.name``). Each scalar leaf - and each *empty*
     container - is stored as ``json.dumps(value)`` so types (bool/int/float/None and empty
     ``[]`` / ``{}``) round-trip losslessly.
     """
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
 
     def _walk(key: str, value: Any) -> None:
         if isinstance(value, dict) and value:
@@ -76,14 +76,14 @@ def _flatten_dict(data: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
     return result
 
 
-def _unflatten_dict(flat: Dict[str, str]) -> Dict[str, Any]:
+def _unflatten_dict(flat: dict[str, str]) -> dict[str, Any]:
     """Rebuild a nested dict from dot-separated flat keys.
 
     Numeric path segments produce lists; all others produce dicts. Leaves are
     ``json.loads``-decoded back to their original type (falling back to the raw string if a
     value is not valid JSON).
     """
-    root: Dict[str, Any] = {}
+    root: dict[str, Any] = {}
     for compound_key in sorted(flat):
         raw = flat[compound_key]
         try:
@@ -123,7 +123,7 @@ def _compress_config(config: BaseModel) -> str:
     return base64.urlsafe_b64encode(zlib.compress(json_bytes)).decode("ascii")
 
 
-def _decompress_config(encoded: str, model_class: Type[T]) -> T:
+def _decompress_config(encoded: str, model_class: type[T]) -> T:
     """Deserialize a compressed base64url string back into a Pydantic model."""
     try:
         compressed = base64.urlsafe_b64decode(encoded)
@@ -141,7 +141,7 @@ def _location() -> Any:
     return pn.state.location
 
 
-def _read_query_params() -> Dict[str, str]:
+def _read_query_params() -> dict[str, str]:
     """Read current URL query parameters as a flat string dict."""
     location = _location()
     if location is None or not location.search:
@@ -150,7 +150,7 @@ def _read_query_params() -> Dict[str, str]:
     return {k: v[-1] for k, v in parsed.items()}
 
 
-def _write_query_params(params: Dict[str, str]) -> None:
+def _write_query_params(params: dict[str, str]) -> None:
     """Write query parameters to the URL, replacing the full query string."""
     location = _location()
     if location is None:
@@ -172,7 +172,7 @@ class UrlConfig(Generic[T]):
         url_cfg.set_config(settings)      # writes to URL, compressed
     """
 
-    def __init__(self, model_class: Type[T], param_name: str = "config") -> None:
+    def __init__(self, model_class: type[T], param_name: str = "config") -> None:
         self.model_class = model_class
         self.param_name = param_name
 
@@ -229,11 +229,7 @@ class UrlConfig(Generic[T]):
         """
         existing = _read_query_params()
         prefix = f"{self.param_name}."
-        preserved = {
-            k: v
-            for k, v in existing.items()
-            if k != self.param_name and not k.startswith(prefix)
-        }
+        preserved = {k: v for k, v in existing.items() if k != self.param_name and not k.startswith(prefix)}
 
         if mode is UrlConfigMode.COMPRESSED_BASE64:
             preserved[self.param_name] = _compress_config(config)
@@ -241,9 +237,7 @@ class UrlConfig(Generic[T]):
             preserved[self.param_name] = config.model_dump_json()
         elif mode is UrlConfigMode.PLAIN_KEYS:
             # mode="json" so enums serialize to their values and datetimes to ISO strings.
-            preserved.update(
-                _flatten_dict(config.model_dump(mode="json"), prefix=self.param_name)
-            )
+            preserved.update(_flatten_dict(config.model_dump(mode="json"), prefix=self.param_name))
         else:
             raise ValueError(f"Unknown UrlConfigMode: {mode}")
 
@@ -253,17 +247,9 @@ class UrlConfig(Generic[T]):
         """Remove this config's parameters from the URL, preserving others."""
         existing = _read_query_params()
         prefix = f"{self.param_name}."
-        _write_query_params(
-            {
-                k: v
-                for k, v in existing.items()
-                if k != self.param_name and not k.startswith(prefix)
-            }
-        )
+        _write_query_params({k: v for k, v in existing.items() if k != self.param_name and not k.startswith(prefix)})
 
-    def bind(
-        self, mode: UrlConfigMode = UrlConfigMode.COMPRESSED_BASE64
-    ) -> "BoundConfig[T]":
+    def bind(self, mode: UrlConfigMode = UrlConfigMode.COMPRESSED_BASE64) -> BoundConfig[T]:
         """Read config from the URL and return an auto-syncing proxy.
 
         The model class should use ``ConfigDict(validate_assignment=True)`` so Pydantic

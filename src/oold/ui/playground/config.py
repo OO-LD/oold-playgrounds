@@ -174,16 +174,32 @@ def looks_like_url(value: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
+#: Documents already fetched this session. A schema is re-read on every recompute - which a
+#: keystroke triggers - and a published schema does not change underneath an editing session,
+#: so without this the app would refetch the same files continuously.
+_CACHE: dict[str, str] = {}
+
+
+def clear_cache() -> None:
+    """Forget fetched documents, so a reload picks up a changed remote file."""
+    _CACHE.clear()
+
+
 def fetch(url: str, timeout: float = 10.0) -> str:
-    """Read a remote document as text.
+    """Read a remote document as text, remembering it for the rest of the session.
 
     Kept as a seam: a browser build patches ``urllib`` through ``pyodide-http`` rather than
     replacing this function.
     """
+    if url in _CACHE:
+        return _CACHE[url]
+
     from urllib.request import urlopen
 
     with urlopen(url, timeout=timeout) as response:  # noqa: S310 - scheme checked by caller
-        return response.read().decode("utf-8")
+        text = response.read().decode("utf-8")
+    _CACHE[url] = text
+    return text
 
 
 def resolve_source(value: str) -> tuple[str, str | None]:
@@ -202,6 +218,16 @@ def resolve_source(value: str) -> tuple[str, str | None]:
     except Exception as exc:
         logger.warning("could not fetch %s: %s", value.strip(), exc)
         return "", f"could not fetch {value.strip()}: {exc}"
+
+
+def source_base(value: str) -> str | None:
+    """The URL a field's relative references resolve against, if it named one.
+
+    Published schemas reference their neighbours by bare filename
+    (``"$ref": "Length.schema.json"``), so a schema loaded from a URL only has a resolvable
+    chain when that URL is remembered.
+    """
+    return value.strip() if looks_like_url(value) else None
 
 
 def parse_document(text: str) -> tuple[Any, str | None]:

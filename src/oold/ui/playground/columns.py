@@ -10,7 +10,8 @@ rather than meaning is what makes that happen.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import panel as pn
 import param
@@ -133,11 +134,11 @@ def _tabs(*panels: tuple[str, Any]) -> pn.Tabs:
     return pn.Tabs(*panels, sizing_mode="stretch_both", dynamic=False)
 
 
-def schema_column(
-    state: param.Parameterized, field: str, error_field: str, chain_of: Callable[[], list]
-) -> pn.Column:
+def schema_column(state: param.Parameterized, field: str, error_field: str, chain_of: Callable[[], list]) -> pn.Column:
     """A schema column: the document in two encodings, plus its reading as terms."""
-    terms = pn.bind(lambda _value: pn.pane.HTML(terms_table(chain_of()), sizing_mode="stretch_width"), state.param[field])
+    terms = pn.bind(
+        lambda _value: pn.pane.HTML(terms_table(chain_of()), sizing_mode="stretch_width"), state.param[field]
+    )
     return pn.Column(
         _tabs(
             ("JSON", DocumentEditor(state, field, "json")),

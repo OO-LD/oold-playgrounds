@@ -226,3 +226,6 @@ benchmark_comparison.txt
 # Local
 AGENTS.md
 .ign
+
+# Screenshots from scripts/check_wasm.py
+wasm*.png

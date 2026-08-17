@@ -124,11 +124,7 @@ def terms_table(schemas: list[dict[str, Any]]) -> str:
     if not sections:
         return "<p style='color:#999'>This schema declares no <code>@context</code>.</p>"
 
-    unmapped = [
-        name
-        for name in (schemas[-1].get("properties") or {})
-        if name not in merged
-    ]
+    unmapped = [name for name in (schemas[-1].get("properties") or {}) if name not in merged]
     note = ""
     if unmapped:
         note = (

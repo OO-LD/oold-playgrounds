@@ -21,7 +21,8 @@ Semantics follow the OO-LD 1.0.0-rc.2 meta-schema: ``x-oold-sssom.predicate_id``
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 #: The SKOS predicate that makes a synonym interchangeable with the primary term. Other
 #: predicates (``closeMatch``, ``broadMatch``, ...) record a weaker relation and are never

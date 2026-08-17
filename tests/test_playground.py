@@ -7,13 +7,13 @@ import pytest
 pytest.importorskip("panel")
 pytest.importorskip("param")
 
-import panel as pn  # noqa: E402,F401
+import panel as pn  # noqa: F401
 
-from oold.ui import url_config as uc  # noqa: E402
-from oold.ui.playground import config as cfg  # noqa: E402
-from oold.ui.playground.graph import graph_data, shorten  # noqa: E402
-from oold.ui.playground.state import PlaygroundState, schema_filename  # noqa: E402
-from oold.ui.playground.terms import terms_table  # noqa: E402
+from oold.ui import url_config as uc
+from oold.ui.playground import config as cfg
+from oold.ui.playground.graph import graph_data, shorten
+from oold.ui.playground.state import PlaygroundState, schema_filename
+from oold.ui.playground.terms import terms_table
 
 
 class _Location:
@@ -158,10 +158,7 @@ def test_the_paste_field_takes_over_the_bus():
     state = PlaygroundState()
     from_source = json.loads(state.target_instance)
 
-    state.pasted_rdf = (
-        "@prefix schema: <https://schema.org/> .\n"
-        '<https://example.org/people/bob> schema:name "Bob" .'
-    )
+    state.pasted_rdf = '@prefix schema: <https://schema.org/> .\n<https://example.org/people/bob> schema:name "Bob" .'
     state.use_paste = True
 
     pasted = json.loads(state.target_instance)
@@ -257,7 +254,7 @@ def test_the_playground_does_not_pull_in_the_heavy_dependencies():
         " 'SPARQLWrapper') if m in sys.modules];"
         "print(','.join(heavy))"
     )
-    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)  # noqa: S603 - the command is built here, not supplied
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "", f"playground imported: {result.stdout.strip()}"

@@ -119,9 +119,7 @@ def test_a_null_entry_is_not_a_synonym():
 def test_exact_match_is_the_default_and_others_are_excluded():
     assert is_exact_match({}) is True
     assert is_exact_match({"x-oold-sssom": {"predicate_id": "skos:exactMatch"}}) is True
-    assert is_exact_match(
-        {"x-oold-sssom": {"predicate_id": "http://www.w3.org/2004/02/skos/core#exactMatch"}}
-    ) is True
+    assert is_exact_match({"x-oold-sssom": {"predicate_id": "http://www.w3.org/2004/02/skos/core#exactMatch"}}) is True
     assert is_exact_match({"x-oold-sssom": {"predicate_id": "skos:closeMatch"}}) is False
 
     schema = _schema(

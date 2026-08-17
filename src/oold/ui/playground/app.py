@@ -9,7 +9,8 @@ create.
 
 from __future__ import annotations
 
-import json
+import contextlib
+import html
 import logging
 from typing import Any
 
@@ -18,7 +19,6 @@ import panel as pn
 from oold.ui.playground import config as cfg
 from oold.ui.playground.columns import (
     EDITOR_HEIGHT,
-    DocumentEditor,
     error_pane,
     instance_column,
     schema_column,
@@ -44,13 +44,18 @@ def _chain_of(state: PlaygroundState, field: str) -> list[dict[str, Any]]:
     return chain(document, None)
 
 
-def paste_panel(state: PlaygroundState, split: SplitColumns) -> pn.Column:
-    """The centre input: pasted RDF, in either notation, replacing the source columns."""
+def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn.Column]:
+    """The alternative input: pasted RDF, in either notation, replacing the source columns.
+
+    Returns the toolbar that turns it on and the editor itself. The toolbar belongs above the
+    columns because it changes which of them are in play; the editor sits between the two
+    halves, where the graph it supplies enters.
+    """
     toggle = pn.widgets.Toggle(
         name="Paste RDF instead",
         value=state.use_paste,
         button_type="primary",
-        sizing_mode="stretch_width",
+        width=200,
     )
     turtle_editor = pn.widgets.CodeEditor(
         value=state.pasted_rdf,
@@ -67,7 +72,15 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> pn.Column:
         theme="github_light_default",
     )
     tabs = pn.Tabs(("Turtle", turtle_editor), ("JSON-LD", jsonld_editor), sizing_mode="stretch_width")
-    body = pn.Column(tabs, error_pane(state, "bus_error"), sizing_mode="stretch_width", visible=state.use_paste)
+    body = pn.Column(
+        pn.pane.HTML("<b>Paste RDF</b>", margin=(6, 4)),
+        tabs,
+        error_pane(state, "bus_error"),
+        width=320,
+        sizing_mode="stretch_height",
+        margin=(0, 4),
+        visible=state.use_paste,
+    )
 
     def apply(*_events: Any) -> None:
         if tabs.active == 0:
@@ -90,20 +103,23 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> pn.Column:
 
     toggle.param.watch(on_toggle, "value")
 
-    return pn.Column(
+    toolbar = pn.Row(
         toggle,
-        body,
-        width=320,
-        sizing_mode="stretch_height",
+        pn.pane.HTML(
+            "<small style='color:var(--muted-text-color,#666)'>"
+            "replaces the source columns as the input for the right-hand side</small>",
+            margin=(10, 6),
+        ),
+        pn.HSpacer(),
+        sizing_mode="stretch_width",
         margin=(0, 4),
     )
+    return toolbar, body
 
 
 def rdf_controls(state: PlaygroundState) -> pn.Row:
     """Serialization and mapping-set choice for the exported graph."""
-    fmt = pn.widgets.Select(
-        name="", options={"Turtle": TURTLE, "JSON-LD": JSON_LD}, value=state.rdf_format, width=110
-    )
+    fmt = pn.widgets.Select(name="", options={"Turtle": TURTLE, "JSON-LD": JSON_LD}, value=state.rdf_format, width=110)
     fmt.param.watch(lambda event: setattr(state, "rdf_format", event.new), "value")
 
     mapping = pn.widgets.Select(name="", options={"consensus (declared)": ""}, value="", width=210)
@@ -130,22 +146,120 @@ def rdf_controls(state: PlaygroundState) -> pn.Row:
     )
 
 
-def log_panel() -> pn.Card:
-    """Application log, collapsed by default."""
-    try:
-        from panelini.panels.terminalmirror import TerminalMirror
+class _PaneLogHandler(logging.Handler):
+    """Render log records into an HTML pane, newest last."""
 
-        body: Any = TerminalMirror(mirror=True)
-    except Exception:  # pragma: no cover - the terminal is a convenience, not a requirement
-        body = pn.pane.HTML("<small>Log unavailable.</small>")
-    return pn.Card(body, title="Log", collapsed=True, sizing_mode="stretch_width")
+    def __init__(self, pane: pn.pane.HTML, limit: int = 200) -> None:
+        super().__init__()
+        self._pane = pane
+        self._limit = limit
+        self._lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        colour = {"WARNING": "#b26a00", "ERROR": "#c62828", "CRITICAL": "#c62828"}.get(record.levelname, "inherit")
+        self._lines.append(f"<div style='color:{colour}'>{html.escape(self.format(record))}</div>")
+        del self._lines[: -self._limit]
+        # Suppressed rather than reported: this *is* the reporting path, so logging a failure
+        # to log would recurse.
+        with contextlib.suppress(Exception):
+            self._pane.object = (
+                "<div style='font-family:monospace;font-size:12px;line-height:1.4'>" + "".join(self._lines) + "</div>"
+            )
+
+
+def log_panel() -> tuple[pn.Card, logging.Handler]:
+    """Application log, collapsed by default, and the handler that feeds it.
+
+    Fed by a logging handler rather than panelini's stdout mirror: a served app has one
+    process and several sessions, so mirroring ``sys.stdout`` would show every user every
+    other user's activity, and nothing at all when the interesting messages went through
+    ``logging`` instead of ``print``.
+
+    Rendered into an HTML pane rather than ``pn.widgets.Terminal``: building the terminal's
+    model sets a property that schedules a debounced server callback, and that reaches for
+    bokeh's tornado-based server code, which Pyodide does not ship. The browser build dies on
+    it, so the terminal is simply not usable here.
+    """
+    view = pn.pane.HTML("", sizing_mode="stretch_width")
+    handler = _PaneLogHandler(view)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%H:%M:%S"))
+    handler.setLevel(logging.INFO)
+    terminal = pn.Column(view, height=180, scroll=True, sizing_mode="stretch_width")
+
+    app_logger = logging.getLogger("oold")
+    app_logger.setLevel(logging.INFO)
+    app_logger.propagate = False
+
+    # Attached once the document exists, for the same reason: a log line written while the
+    # page is still being assembled would update a widget mid-construction.
+    if pn.state.curdoc is not None:
+        pn.state.onload(lambda: app_logger.addHandler(handler))
+    else:
+        app_logger.addHandler(handler)
+
+    # The logger is global but the terminal belongs to one session. Without this the handlers
+    # pile up and a later session's messages are written into a closed session's document,
+    # which surfaces as a Bokeh "callback already added with this ID" error far from here.
+    # Bokeh requires exactly one positional parameter here; a default argument is rejected.
+    def detach(session_context: Any) -> None:
+        app_logger.removeHandler(handler)
+
+    if pn.state.curdoc is not None:
+        pn.state.on_session_destroyed(detach)
+
+    return pn.Card(terminal, title="Log", collapsed=True, sizing_mode="stretch_width"), handler
+
+
+#: The state fields that make up a shareable session. Derived fields are left out: they are
+#: recomputed from these, so putting them in the URL would only make the link longer.
+SESSION_FIELDS = (
+    "source_schema",
+    "source_instance",
+    "target_schema",
+    "pasted_rdf",
+    "use_paste",
+    "paste_format",
+    "rdf_format",
+    "mapping_set",
+)
+
+
+def bind_url(state: PlaygroundState) -> None:
+    """Seed the session from the URL and keep the URL in step with it.
+
+    Written compressed, so a link stays short; a hand-written link may use readable
+    per-field parameters or plain JSON and is read back just the same.
+    """
+    from oold.ui.url_config import UrlConfig
+
+    manager = UrlConfig(cfg.PlaygroundConfig, param_name="pg")
+    if manager.has_config():
+        seeded = manager.get_config()
+        for field in SESSION_FIELDS:
+            setattr(state, field, getattr(seeded, field))
+        logger.info("session restored from the URL")
+
+    def persist(*_events: Any) -> None:
+        try:
+            manager.set_config(cfg.PlaygroundConfig(**{field: getattr(state, field) for field in SESSION_FIELDS}))
+        except Exception as exc:  # pragma: no cover - the URL is a convenience, not the state
+            logger.warning("could not write the session to the URL: %s", exc)
+
+    # Only on an actual change. Writing during construction would set a reactive property
+    # while the document is still being built, which schedules a debounced server callback -
+    # and in a browser (Pyodide) build that pulls in bokeh's tornado-based server code, which
+    # is not installed there. Rewriting the URL on load is also pointless: it says what it
+    # already said.
+    state.param.watch(persist, list(SESSION_FIELDS))
 
 
 def build(state: PlaygroundState | None = None) -> Any:
     """The assembled application, ready to serve."""
     pn.extension("codeeditor", "terminal", notifications=False)
 
+    log_card, _handler = log_panel()
     state = state or PlaygroundState()
+    bind_url(state)
 
     panes = [
         Pane(
@@ -181,15 +295,16 @@ def build(state: PlaygroundState | None = None) -> Any:
     ]
 
     split = SplitColumns(panes)
-    centre = paste_panel(state, split)
+    toolbar, paste_body = paste_panel(state, split)
 
     main = pn.Column(
+        toolbar,
         pn.Row(
             pn.Column(split, sizing_mode="stretch_both"),
-            centre,
+            paste_body,
             sizing_mode="stretch_both",
         ),
-        log_panel(),
+        log_card,
         sizing_mode="stretch_both",
     )
 
@@ -198,10 +313,10 @@ def build(state: PlaygroundState | None = None) -> Any:
 
         app = Panelini(title=TITLE, sidebar_enabled=True, sidebar_visible=False)
         app.main_set(objects=[main])
-        return app
     except Exception as exc:  # pragma: no cover - panelini is optional at import time
         logger.warning("panelini unavailable (%s); falling back to a plain template", exc)
         return pn.template.FastListTemplate(title=TITLE, main=[main])
+    return app
 
 
 def serve(port: int = 5006, show: bool = True) -> None:
