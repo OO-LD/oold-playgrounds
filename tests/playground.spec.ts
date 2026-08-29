@@ -10,6 +10,7 @@ const consoleErrors: string[] = [];
 const pageErrors: string[] = [];
 const networkFailures: Failure[] = [];
 const notes: string[] = [];
+const payload = new Map<string, number>();
 
 function record(label: string, value: unknown) {
   const rendered =
@@ -42,6 +43,10 @@ test.beforeAll(async ({ browser }) => {
         kind: `http-${response.status()}`,
         detail: response.url(),
       });
+    }
+    const length = Number(response.headers()["content-length"] ?? 0);
+    if (Number.isFinite(length) && length > 0) {
+      payload.set(response.url(), length);
     }
   });
 
@@ -321,7 +326,109 @@ test("8. hover on an oold symbol returns non-empty markdown", async () => {
   expect(hovers.OoldField.markdown ?? "").not.toBe("");
 });
 
-test("9. workspace injection stats and final screenshot", async () => {
+test("9. link overlay records batched resolution and cache hits", async () => {
+  await page.getByTestId("tab-link_overlay_demo.py").click();
+  await page.getByTestId("overlay-toggle").check();
+  await expect(page.getByTestId("overlay-toggle")).toBeChecked();
+
+  await page.getByTestId("run").click();
+  await expect(page.getByTestId("output")).toContainText("third", {
+    timeout: 60_000,
+  });
+
+  const stdout = (await page.getByTestId("output").textContent()) ?? "";
+  record("link_overlay_demo.py stdout", stdout.trim());
+  expect(stdout).toContain("first  -> ['Bob', 'Carol', 'Dave']");
+  expect(stdout).toContain("second -> ['Bob', 'Carol', 'Dave']");
+
+  const events = await page.evaluate(() => window.__playground!.linkEvents());
+  const calls = await page.evaluate(() => window.__playground!.backendCalls());
+  record("link resolution events", events);
+  record("backend calls recorded at the resolver boundary", calls);
+  writeFileSync(
+    `${ARTIFACTS}/link_events.json`,
+    JSON.stringify({ events, calls }, null, 2),
+  );
+
+  expect(events.length, "no resolution events were recorded").toBe(3);
+
+  const [batched, cacheHit, second] = events;
+
+  // 1. batching: three IRIs collapse into a single resolver call
+  expect(batched.field).toBe("knows");
+  expect(batched.iris).toEqual(["ex:bob", "ex:carol", "ex:dave"]);
+  expect(batched.backendCalls).toBe(1);
+  expect(batched.cached).toBe(0);
+  expect(batched.values["ex:bob"]).toMatchObject({ name: "Bob" });
+  expect(batched.values["ex:carol"]).toMatchObject({ name: "Carol" });
+
+  // 2. cache hit: same refs, no further backend traffic
+  expect(cacheHit.backendCalls).toBe(0);
+  expect(cacheHit.cached).toBe(3);
+  expect(cacheHit.fetchedIris).toEqual([]);
+
+  // 3. a different subject owns different refs, so it fetches again
+  expect(second.backendCalls).toBe(1);
+  expect(second.iris).toEqual(["ex:bob"]);
+
+  // three dereferences, two backend calls: N+1 avoidance is measurable
+  expect(calls.length).toBe(2);
+  expect(calls.map((call) => call.iris.length)).toEqual([3, 1]);
+
+  await expect(page.getByTestId("backend-calls")).toContainText("backend calls: 2");
+});
+
+test("10. link overlay renders inline decorations holding fetched values", async () => {
+  await expect
+    .poll(async () => page.locator(".oold-link-overlay").count(), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+
+  const fragments = await page.locator(".oold-link-overlay").allInnerTexts();
+  // Monaco renders after-content spaces as U+00A0, so normalise before matching.
+  const rendered = fragments.join("").replace(/\u00a0/g, " ");
+  record("rendered overlay decoration text", rendered);
+  writeFileSync(`${ARTIFACTS}/overlay_decoration.txt`, rendered);
+
+  expect(rendered, "overlay does not show the fetched name").toContain("Bob");
+  expect(rendered).toContain("Carol");
+  expect(rendered).toContain("SimpleDictDocumentStore");
+  expect(rendered).toContain("1 backend call, 3 IRIs, 0 cached");
+
+  await page.screenshot({ path: `${ARTIFACTS}/link_overlay.png` });
+
+  const linkEventItems = await page.getByTestId("link-event").allInnerTexts();
+  record("link event list in the side panel", linkEventItems);
+  expect(linkEventItems.join("\n")).toContain("cached 3 IRIs, 0 backend calls");
+});
+
+test("11. overlay off restores the uninstrumented run path", async () => {
+  await page.getByTestId("overlay-toggle").uncheck();
+  await expect(page.getByTestId("overlay-toggle")).not.toBeChecked();
+
+  const installed = await page.evaluate(async () =>
+    window.__playground!.runPython("import oold_overlay\nstr(oold_overlay.installed())"),
+  );
+  record("oold_overlay.installed() after toggling off", installed);
+  expect(installed).toBe("False");
+
+  await page.getByTestId("run").click();
+  await expect(page.getByTestId("output")).toContainText("third", {
+    timeout: 60_000,
+  });
+
+  await expect
+    .poll(async () => page.locator(".oold-link-overlay").count(), {
+      timeout: 15_000,
+    })
+    .toBe(0);
+
+  const events = await page.evaluate(() => window.__playground!.linkEvents());
+  expect(events).toEqual([]);
+});
+
+test("12. workspace injection stats and final screenshot", async () => {
   const injection = await page.evaluate(() => window.__playground!.injection());
   record("site-packages injected into the ty workspace", injection);
 
@@ -330,6 +437,21 @@ test("9. workspace injection stats and final screenshot", async () => {
   await page.getByTestId("tab-notation_example.py").click();
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${ARTIFACTS}/playground.png`, fullPage: false });
+
+  const entries = [...payload.entries()].sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((sum, [, size]) => sum + size, 0);
+  record("total measured payload", {
+    requests: entries.length,
+    totalMB: Number((total / 1024 / 1024).toFixed(2)),
+    largest: entries.slice(0, 12).map(([url, size]) => ({
+      url: url.replace("http://localhost:5173", ""),
+      MB: Number((size / 1024 / 1024).toFixed(2)),
+    })),
+  });
+  writeFileSync(
+    `${ARTIFACTS}/payload.json`,
+    JSON.stringify({ totalBytes: total, entries }, null, 2),
+  );
 
   record("console errors", consoleErrors.length === 0 ? "(none)" : consoleErrors);
   record("page errors", pageErrors.length === 0 ? "(none)" : pageErrors);

@@ -16,6 +16,15 @@ import {
   runUserScript,
   type PyodideRuntime,
 } from "./Editor/pyodideRuntime";
+import {
+  drainOverlay,
+  loadOverlayModule,
+  resetOverlay,
+  setOverlayEnabled,
+  type LinkResolutionEvent,
+  type OverlayDrain,
+  formatEvent,
+} from "./Editor/linkOverlay";
 import { DEFAULT_FILE, SAMPLES } from "./samples";
 
 const INJECT_PACKAGES = [
@@ -50,6 +59,8 @@ declare global {
       timings(): Record<string, number>;
       injection(): InjectionStats | null;
       imports(): Record<string, { ok: boolean; detail: string }> | null;
+      linkEvents(): LinkResolutionEvent[];
+      backendCalls(): OverlayDrain["backendCalls"];
     };
   }
 }
@@ -95,6 +106,9 @@ export default function Playground() {
     { ok: boolean; detail: string }
   > | null>(null);
   const [tyVersion, setTyVersion] = useState("");
+  const [overlayEnabled, setOverlayEnabledState] = useState(false);
+  const [linkEvents, setLinkEvents] = useState<LinkResolutionEvent[]>([]);
+  const [backendCalls, setBackendCalls] = useState<OverlayDrain["backendCalls"]>([]);
 
   const runtimeRef = useRef<PyodideRuntime | null>(null);
   const editorRef = useRef<EditorHandle | null>(null);
@@ -140,6 +154,9 @@ export default function Playground() {
         runtimeRef.current = runtime;
         timings.current.pyodideReady = performance.now();
         setStatus("installing");
+
+        await loadOverlayModule(runtime.pyodide);
+        if (cancelled) return;
 
         setProgress("probing oold runtime imports");
         const probes = await probeImports(runtime.pyodide, PROBE_MODULES);
@@ -241,12 +258,46 @@ export default function Playground() {
       return;
     }
     setOutput("");
+    setLinkEvents([]);
+    setBackendCalls([]);
+
+    if (overlayEnabled) {
+      await resetOverlay(runtime.pyodide);
+    }
+
     try {
       await runUserScript(runtime.pyodide, contents, selected);
     } catch (caught) {
       setOutput((prev) => prev + "\n" + describeError(caught));
     }
-  }, [contents, selected]);
+
+    if (overlayEnabled) {
+      const drained = await drainOverlay(runtime.pyodide);
+      setLinkEvents(drained.events);
+      setBackendCalls(drained.backendCalls);
+    }
+  }, [contents, selected, overlayEnabled]);
+
+  const toggleOverlay = useCallback(
+    async (next: boolean) => {
+      const runtime = runtimeRef.current;
+      if (runtime == null) {
+        return;
+      }
+      setOverlayEnabledState(next);
+      if (!next) {
+        setLinkEvents([]);
+        setBackendCalls([]);
+      }
+      try {
+        await setOverlayEnabled(runtime.pyodide, next);
+      } catch (caught) {
+        setOverlayEnabledState(!next);
+        setError(describeError(caught));
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (workspace == null) {
@@ -289,8 +340,18 @@ export default function Playground() {
       timings: () => timings.current,
       injection: () => injection,
       imports: () => importResults,
+      linkEvents: () => linkEvents,
+      backendCalls: () => backendCalls,
     };
-  }, [workspace, handleByName, status, injection, importResults]);
+  }, [
+    workspace,
+    handleByName,
+    status,
+    injection,
+    importResults,
+    linkEvents,
+    backendCalls,
+  ]);
 
   const onEditorMount = useCallback((handle: EditorHandle) => {
     editorRef.current = handle;
@@ -305,6 +366,16 @@ export default function Playground() {
           <span data-testid="progress">{progress}</span>
           {tyVersion ? <span data-testid="ty-version">ty {tyVersion}</span> : null}
         </div>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            data-testid="overlay-toggle"
+            disabled={status !== "ready"}
+            checked={overlayEnabled}
+            onChange={(event) => void toggleOverlay(event.target.checked)}
+          />
+          link overlay
+        </label>
         <button
           type="button"
           data-testid="run"
@@ -339,6 +410,7 @@ export default function Playground() {
               value={contents[selected] ?? ""}
               files={files}
               diagnostics={diagnostics}
+              linkEvents={linkEvents}
               workspace={workspace}
               onChange={onChange}
               onMount={onEditorMount}
@@ -372,6 +444,28 @@ export default function Playground() {
               ))
             )}
           </ul>
+
+          <h2>Link resolution ({linkEvents.length})</h2>
+          <ul data-testid="link-events">
+            {linkEvents.length === 0 ? (
+              <li>none recorded</li>
+            ) : (
+              linkEvents.map((event, index) => (
+                <li key={index} data-testid="link-event">
+                  <code>
+                    {event.file}:{event.line}
+                  </code>{" "}
+                  {formatEvent(event)}
+                </li>
+              ))
+            )}
+          </ul>
+          <p data-testid="backend-calls">
+            backend calls: {backendCalls.length}
+            {backendCalls.length > 0
+              ? ` (${backendCalls.map((call) => `${call.resolver}[${call.iris.length}]`).join(", ")})`
+              : ""}
+          </p>
 
           <h2>Injected sources</h2>
           <p data-testid="injection">

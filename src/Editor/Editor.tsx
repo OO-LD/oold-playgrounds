@@ -27,6 +27,11 @@ import {
   type Workspace,
 } from "ty_wasm";
 import type { NormalizedDiagnostic } from "./tyDiagnostics";
+import {
+  formatEvent,
+  formatEventDetail,
+  type LinkResolutionEvent,
+} from "./linkOverlay";
 
 import IStandaloneCodeEditor = editor.IStandaloneCodeEditor;
 import CompletionItemKind = languages.CompletionItemKind;
@@ -43,6 +48,7 @@ type Props = {
   value: string;
   files: PlaygroundFile[];
   diagnostics: NormalizedDiagnostic[];
+  linkEvents: LinkResolutionEvent[];
   workspace: Workspace;
   onChange(value: string): void;
   onMount(handle: EditorHandle): void;
@@ -58,11 +64,63 @@ export default function CodeEditor({
   value,
   files,
   diagnostics,
+  linkEvents,
   workspace,
   onChange,
   onMount,
 }: Props) {
   const serverRef = useRef<PlaygroundServer | null>(null);
+  const editorRef = useRef<IStandaloneCodeEditor | null>(null);
+  const decorationsRef = useRef<editor.IEditorDecorationsCollection | null>(null);
+
+  useEffect(() => {
+    const instance = editorRef.current;
+    if (instance == null) {
+      return;
+    }
+
+    const model = instance.getModel();
+    if (model == null) {
+      return;
+    }
+
+    const byLine = new Map<number, LinkResolutionEvent[]>();
+    for (const event of linkEvents) {
+      if (event.file !== fileName || event.line == null) {
+        continue;
+      }
+      if (event.line < 1 || event.line > model.getLineCount()) {
+        continue;
+      }
+      const bucket = byLine.get(event.line);
+      if (bucket == null) {
+        byLine.set(event.line, [event]);
+      } else {
+        bucket.push(event);
+      }
+    }
+
+    const decorations = [...byLine.entries()].map(([line, events]) => ({
+      range: new Range(line, model.getLineLength(line) + 1, line, model.getLineLength(line) + 1),
+      options: {
+        after: {
+          content: `    ${events.map(formatEvent).join("   |   ")}`,
+          inlineClassName: "oold-link-overlay",
+        },
+        hoverMessage: events.map((event) => ({
+          value: formatEventDetail(event),
+          isTrusted: true,
+        })),
+        showIfCollapsed: true,
+      },
+    }));
+
+    if (decorationsRef.current == null) {
+      decorationsRef.current = instance.createDecorationsCollection(decorations);
+    } else {
+      decorationsRef.current.set(decorations);
+    }
+  }, [linkEvents, fileName, value]);
 
   useEffect(() => {
     serverRef.current?.update({ workspace, files });
@@ -77,6 +135,8 @@ export default function CodeEditor({
   const handleMount: OnMount = useCallback(
     (instance, monacoApi) => {
       serverRef.current?.dispose();
+      editorRef.current = instance;
+      decorationsRef.current = null;
       const server = new PlaygroundServer(monacoApi, instance, {
         workspace,
         files,
