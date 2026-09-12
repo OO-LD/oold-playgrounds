@@ -1,0 +1,7 @@
+{
+  "LiteBuildConfig": {
+    "apps": ["notebooks"],
+    "no_unused_shared_packages": true,
+    "no_libarchive": true
+  }
+}
