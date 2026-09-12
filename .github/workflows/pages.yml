@@ -59,6 +59,9 @@ jobs:
         run: |
           git clone --filter=blob:none https://github.com/astral-sh/ruff ruff
           git -C ruff checkout "$RUFF_REF"
+          # Added from inside the checkout so it lands on the toolchain that
+          # ruff's rust-toolchain file pins, not the runner default.
+          (cd ruff && rustup target add wasm32-unknown-unknown)
           curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
           wasm-pack build ruff/crates/ty_wasm --target web --out-dir "$GITHUB_WORKSPACE/playgrounds/ty-playground/ty_wasm"
 
