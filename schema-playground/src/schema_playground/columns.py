@@ -25,6 +25,9 @@ from schema_playground.transform import JSON_LD
 
 EDITOR_HEIGHT = 420
 
+#: Merged last into every editor: monaco's default type runs large for four columns.
+EDITOR_OPTIONS = {"fontSize": 12}
+
 
 def _to_yaml(document: Any) -> str:
     import yaml
@@ -59,14 +62,17 @@ class DocumentEditor(pn.viewable.Viewer):
 
         if schema_field is not None and json_schema is None:
             json_schema = getattr(state, schema_field)
+        self._json_schema = json_schema if language == "json" else None
         # schema_request="ignore": OO-LD documents declare their $schema, which the editor
         # never fetches and would otherwise flag on every buffer.
         self._editor = MonacoEditor(
             value=self._current_text(),
             language=language,
             read_only=readonly,
-            json_schema=json_schema if language == "json" else None,
+            json_schema=self._json_schema,
+            schema_store=self._schema_store(),
             schema_request="ignore",
+            options=EDITOR_OPTIONS,
             sizing_mode="stretch_width",
             height=height,
         )
@@ -74,9 +80,33 @@ class DocumentEditor(pn.viewable.Viewer):
             self._editor.param.watch(self._on_edit, "value")
         state.param.watch(self._on_state, field)
         if schema_field is not None and language == "json":
-            state.param.watch(
-                lambda event: setattr(self._editor, "json_schema", event.new or None), schema_field
-            )
+            state.param.watch(self._on_schema, schema_field)
+
+    def _declared_pointer(self) -> str | None:
+        """The `$schema` the current buffer names, if any."""
+        document = self._document()
+        pointer = document.get("$schema") if isinstance(document, dict) else None
+        return pointer if isinstance(pointer, str) and pointer.strip() else None
+
+    def _schema_store(self) -> dict | None:
+        """The schema registered under the buffer's own `$schema` pointer.
+
+        A buffer that declares `$schema` bypasses the fileMatch association entirely (the
+        in-document pointer wins in Monaco's JSON service), so the same schema is registered
+        under that URI too. Both are set, because the pointer can be edited away.
+        """
+        pointer = self._declared_pointer()
+        if pointer and self._json_schema:
+            return {pointer: self._json_schema}
+        return None
+
+    def _sync_schema(self) -> None:
+        self._editor.json_schema = self._json_schema
+        self._editor.schema_store = self._schema_store()
+
+    def _on_schema(self, event: Any) -> None:
+        self._json_schema = event.new or None
+        self._sync_schema()
 
     def _document(self) -> Any:
         text, _ = cfg.resolve_source(getattr(self._state, self._field))
@@ -103,6 +133,8 @@ class DocumentEditor(pn.viewable.Viewer):
             if error is None and document is not None:
                 text = json.dumps(document, indent=2)
         setattr(self._state, self._field, text)
+        if self._json_schema:
+            self._sync_schema()
 
     def _on_state(self, event: Any) -> None:
         wanted = self._current_text()
@@ -216,16 +248,16 @@ def instance_column(
     """
     rdf_view = MonacoEditor(
         value=getattr(state, rdf_field),
-        language="plaintext",
+        language="turtle",
         read_only=True,
         schema_request="ignore",
+        options=EDITOR_OPTIONS,
         sizing_mode="stretch_width",
         height=EDITOR_HEIGHT,
     )
     state.param.watch(lambda event: setattr(rdf_view, "value", event.new), rdf_field)
-    # Turtle has no Monaco language in the bundle; JSON-LD is JSON and gets its tokenizer.
     state.param.watch(
-        lambda event: setattr(rdf_view, "language", "json" if event.new == JSON_LD else "plaintext"),
+        lambda event: setattr(rdf_view, "language", "json" if event.new == JSON_LD else "turtle"),
         "rdf_format",
     )
 

@@ -4,3 +4,4 @@ __pycache__/
 *.egg-info/
 # Screenshots from scripts/check_wasm.py
 wasm*.png
+.playground_port

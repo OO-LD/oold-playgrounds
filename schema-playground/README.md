@@ -43,7 +43,7 @@ uv run python scripts/build_wasm.py
 python -m http.server --directory dist
 ```
 
-converts the app to a static [Pyodide](https://pyodide.org/) page under `dist/`, no Python server needed. `scripts/check_wasm.py` loads the built page in a real (Playwright) browser and reports what broke; run it against the served page after a build.
+converts the app to a static [Pyodide](https://pyodide.org/) page under `dist/`, no Python server needed. Two Playwright checks keep the claims honest: `scripts/check_wasm.py` loads the built page in a real browser and reports what broke, and `scripts/check_editors.py` (against a served `scripts/_editors_probe_app.py`) asserts that the editors actually validate inline, complete from the schema, and highlight JSON, YAML and Turtle.
 
 ## Pending upstream migration
 
@@ -52,4 +52,4 @@ Three modules live here until they move elsewhere; each migration is tracked:
 - `mappings.py` and `transform.py` - mapping-set selection and the RDF transform: [OO-LD/oold-python#154](https://github.com/OO-LD/oold-python/pull/154). Once released, delete both here and import from `oold.utils`.
 - `url_config.py` - URL-backed session state: [opensemanticworld/panelini#43](https://github.com/opensemanticworld/panelini/issues/43). Ported from `opensemantic.base`, whose layering (it depends on `oold`) prevents importing it from there.
 
-The MonacoEditor dependency tracks the `monaco-editor-panel` branch of panelini until that panel is released; the browser build ships a wheel built from the same branch.
+The MonacoEditor dependency tracks the branch of [panelini#60](https://github.com/opensemanticworld/panelini/pull/60) (schema store for in-document `$schema` resolution, YAML and Turtle highlighting) until it merges and releases; the browser build ships a wheel built from the same branch.

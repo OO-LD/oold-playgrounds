@@ -65,7 +65,7 @@ REQUIREMENTS = [
 NO_DEPS = ["oold>=0.20"]
 
 PANELINI_REPO = "https://github.com/opensemanticworld/panelini.git"
-PANELINI_REF = "monaco-editor-panel"
+PANELINI_REF = "feat/monaco-schema-store-and-languages"
 
 
 def build_wheel() -> str:

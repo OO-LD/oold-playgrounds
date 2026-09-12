@@ -19,6 +19,7 @@ import panel as pn
 from schema_playground import config as cfg
 from schema_playground.columns import (
     EDITOR_HEIGHT,
+    EDITOR_OPTIONS,
     error_pane,
     instance_column,
     schema_column,
@@ -61,8 +62,9 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
 
     turtle_editor = MonacoEditor(
         value=state.pasted_rdf,
-        language="plaintext",
+        language="turtle",
         schema_request="ignore",
+        options=EDITOR_OPTIONS,
         sizing_mode="stretch_width",
         height=EDITOR_HEIGHT - 60,
     )
@@ -70,6 +72,7 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
         value="",
         language="json",
         schema_request="ignore",
+        options=EDITOR_OPTIONS,
         sizing_mode="stretch_width",
         height=EDITOR_HEIGHT - 60,
     )

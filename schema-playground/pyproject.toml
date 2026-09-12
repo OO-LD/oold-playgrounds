@@ -8,9 +8,10 @@ dependencies = [
     # The released validator: validate_schema/validate_instance and the schema-derived frames.
     "oold[validation]>=0.20",
     "panel>=1.5",
-    # The MonacoEditor panel (inline JSON-schema validation) is not in a panelini release
-    # yet; track the branch until it merges.
-    "panelini @ git+https://github.com/opensemanticworld/panelini.git@monaco-editor-panel",
+    # The MonacoEditor panel (inline JSON-schema validation, YAML and Turtle highlighting)
+    # is not in a panelini release yet; track the branch of
+    # https://github.com/opensemanticworld/panelini/pull/60 until it merges.
+    "panelini @ git+https://github.com/opensemanticworld/panelini.git@feat/monaco-schema-store-and-languages",
     "param>=2",
     "pydantic>=2",
     # Imported directly here (the RDF pipeline and the YAML panes), not merely through oold.
