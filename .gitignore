@@ -1,0 +1,10 @@
+.venv/
+
+# assembled by scripts/build-site.sh
+site/
+
+# zensical build cache
+.zensical/
+
+# local screenshots
+*.png

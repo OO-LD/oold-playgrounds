@@ -1,0 +1,76 @@
+/* px, not rem: the theme sets html to 125%, so rem here is 20px and a rem based
+   minimum silently collapses the row to one column. */
+.playground-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin: 1.5rem 0 2rem;
+}
+
+.playground-card {
+  display: block;
+  /* Grid items default to min-width auto, which lets the bullet text keep the
+     track from shrinking and collapses the row to a single column. */
+  min-width: 0;
+  padding: 1.2rem 1.4rem 1rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  transition: border-color 120ms, box-shadow 120ms, transform 120ms;
+}
+
+/* The whole card is one anchor, so the theme's link styling would otherwise
+   underline and recolour every word inside it. Scoped under .md-typeset to beat
+   the theme's own anchor rules. */
+.md-typeset a.playground-card,
+.md-typeset a.playground-card:hover,
+.md-typeset a.playground-card:focus,
+.md-typeset a.playground-card * {
+  color: var(--md-default-fg-color);
+  text-decoration: none;
+}
+
+.playground-card:hover,
+.playground-card:focus-visible {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 0.2rem 0.6rem rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+}
+
+.md-typeset a.playground-card .playground-card__title {
+  display: block;
+  margin: 0 0 0.4rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--md-primary-fg-color);
+}
+
+.md-typeset a.playground-card .playground-card__lede {
+  display: block;
+  margin: 0 0 0.6rem;
+  font-weight: 600;
+}
+
+.md-typeset a.playground-card ul,
+.md-typeset a.playground-card ul li {
+  margin: 0;
+  padding-left: 0;
+  font-size: 0.78rem;
+  line-height: 1.7;
+  color: var(--md-default-fg-color--light);
+}
+
+.playground-card ul {
+  padding-left: 1.1rem;
+}
+
+.md-typeset a.playground-card .playground-card__cta {
+  display: block;
+  margin: 0.9rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--md-accent-fg-color);
+}
+
+.playground-card__cta::after {
+  content: " \2192";
+}

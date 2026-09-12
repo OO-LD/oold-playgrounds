@@ -1,0 +1,39 @@
+[project]
+site_name = "OO-LD Playgrounds"
+site_description = "Browser playgrounds for the oold python package"
+site_author = "OO-LD Contributors"
+repo_url = "https://github.com/OO-LD/oold-playgrounds"
+repo_name = "OO-LD/oold-playgrounds"
+copyright = 'Maintained by <a href="https://github.com/OO-LD">OO-LD</a>.'
+
+extra_css = ["stylesheets/extra.css"]
+
+nav = [
+    { "Home" = "index.md" },
+]
+
+[project.theme]
+language = "en"
+logo = "https://raw.githubusercontent.com/OO-LD/schema/main/OO-LD_logo.jpg"
+favicon = "https://raw.githubusercontent.com/OO-LD/schema/main/OO-LD_logo.jpg"
+features = [
+    "content.code.copy",
+    "content.tooltips",
+    "navigation.footer",
+    "navigation.instant",
+    "navigation.top",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "indigo"
+accent = "indigo"
+toggle = { icon = "material/brightness-7", name = "Switch to dark mode" }
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "indigo"
+accent = "indigo"
+toggle = { icon = "material/brightness-4", name = "Switch to light mode" }
