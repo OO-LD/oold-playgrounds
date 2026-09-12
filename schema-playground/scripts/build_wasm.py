@@ -28,23 +28,44 @@ OUT = ROOT / "dist"
 APP = ROOT / "app.py"
 
 #: What the browser needs. Kept explicit so that adding an import that needs a new package
-#: fails here rather than in someone's browser.
+#: fails here rather than in someone's browser. panelini is absent: it comes from a git
+#: branch (see pyproject.toml), which micropip cannot install, so its wheel is built locally
+#: and shipped beside the app's.
 REQUIREMENTS = [
     "oold>=0.20",
-    "panelini",
     "param",
     "pydantic",
     "pyld",
     "rdflib",
     "pyyaml",
-    "jsonschema",
+    # Pinned past the copy Pyodide ships (4.23): the iri checker only registers through the
+    # non-GPL rfc3987-syntax from 4.25 on, and micropip would otherwise consider the shipped
+    # version satisfying and skip the upgrade.
+    "jsonschema>=4.25",
+    # jsonschema's format checkers register only when these are importable, and
+    # oold.validation copies them out of the 2020-12 checker at import time, dying with a
+    # KeyError without them. Listed explicitly: micropip skips the extras of a requirement it
+    # considers already satisfied, so jsonschema[format-nongpl] installs nothing.
+    "isoduration",
+    "rfc3339-validator",
+    "rfc3986-validator",
+    "rfc3987-syntax",
+    "uri-template",
+    "fqdn",
+    "idna",
+    "webcolors",
+    "jsonpointer",
     "referencing",
     "click",
     "pyodide-http",
 ]
 
-#: Installed without their dependency lists (see the module docstring).
-NO_DEPS = ["oold>=0.20", "panelini"]
+#: Installed without their dependency lists (see the module docstring). Local wheels are
+#: added to this group by the patcher.
+NO_DEPS = ["oold>=0.20"]
+
+PANELINI_REPO = "https://github.com/opensemanticworld/panelini.git"
+PANELINI_REF = "monaco-editor-panel"
 
 
 def build_wheel() -> str:
@@ -56,17 +77,40 @@ def build_wheel() -> str:
     return wheels[-1].name
 
 
-def patch_worker(worker: Path, wheel_name: str) -> None:
-    """Make the generated worker install the app wheel and the trimmed dependency set."""
+def build_panelini_wheel() -> str:
+    """Build a panelini wheel from the branch the app depends on, into the output directory.
+
+    Built rather than fetched: the MonacoEditor panel is not in a panelini release yet, and
+    micropip cannot install from git.
+    """
+    import tempfile
+
+    existing = sorted(OUT.glob("panelini-*.whl"), key=lambda p: p.stat().st_mtime)
+    if existing:
+        return existing[-1].name
+    with tempfile.TemporaryDirectory() as workdir:
+        subprocess.check_call(  # noqa: S603,S607 - fixed command
+            ["git", "clone", "--depth", "1", "--branch", PANELINI_REF, PANELINI_REPO, workdir]
+        )
+        subprocess.check_call(["uv", "build", "--wheel", "--out-dir", str(OUT)], cwd=workdir)  # noqa: S603,S607
+    wheels = sorted(OUT.glob("panelini-*.whl"), key=lambda p: p.stat().st_mtime)
+    if not wheels:
+        sys.exit(f"no panelini wheel in {OUT} after the build")
+    return wheels[-1].name
+
+
+def patch_worker(worker: Path, wheel_names: list[str]) -> None:
+    """Make the generated worker install the local wheels and the trimmed dependency set."""
     text = worker.read_text(encoding="utf-8")
-    listed = f"'{wheel_name}', "
-    if listed not in text:
-        sys.exit(f"{worker.name}: expected {wheel_name} in the install list")
 
-    absolute = f'${{new URL("{wheel_name}", self.location.href).href}}'
-    text = text.replace(listed, "", 1)
+    without_deps = []
+    for wheel_name in wheel_names:
+        listed = f"'{wheel_name}', "
+        if listed not in text:
+            sys.exit(f"{worker.name}: expected {wheel_name} in the install list")
+        text = text.replace(listed, "", 1)
+        without_deps.append(f"'${{new URL(\"{wheel_name}\", self.location.href).href}}'")
 
-    without_deps = [f"'{absolute}'"]
     for name in NO_DEPS:
         if f"'{name}', " in text:
             text = text.replace(f"'{name}', ", "", 1)
@@ -91,7 +135,7 @@ def patch_worker(worker: Path, wheel_name: str) -> None:
 
 
 def main() -> None:
-    wheel_name = build_wheel()
+    wheel_names = [build_wheel(), build_panelini_wheel()]
     command = [
         sys.executable,
         "-m",
@@ -103,7 +147,7 @@ def main() -> None:
         "--out",
         str(OUT),
         "--requirements",
-        wheel_name,
+        *wheel_names,
         *REQUIREMENTS,
     ]
     print(" ".join(command))
@@ -111,7 +155,7 @@ def main() -> None:
     if code:
         raise SystemExit(code)
 
-    patch_worker(OUT / f"{APP.stem}.js", wheel_name)
+    patch_worker(OUT / f"{APP.stem}.js", wheel_names)
     print(f"Serve it with: python -m http.server --directory {OUT}")
 
 

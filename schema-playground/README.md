@@ -22,7 +22,7 @@ Then open <http://localhost:5006/app>.
 | Target schema | a second schema, in the same three views |
 | Transformed instance | the same data read through the target schema |
 
-Any column can be collapsed; the rest take the space. Validation runs on every change with the same checks as `oold validate`, and errors appear directly beneath the editor that produced them.
+Any column can be collapsed; the rest take the space. Validation runs twice: the JSON editors ([panelini MonacoEditor](https://github.com/opensemanticworld/panelini/tree/monaco-editor-panel)) validate inline while typing - instances against the resolved schema chain, schemas against the OO-LD meta-schema - and the full `oold validate` pipeline reports beneath the editor that produced the problem.
 
 ## Mapping sets
 
@@ -47,8 +47,9 @@ converts the app to a static [Pyodide](https://pyodide.org/) page under `dist/`,
 
 ## Pending upstream migration
 
-Three modules live here until they move into [`oold-python`](https://github.com/OO-LD/oold-python):
+Three modules live here until they move elsewhere; each migration is tracked:
 
-- `mappings.py` - mapping-set selection (`promote`, `mapping_sets`, `chain`). oold 0.20.0 knows `x-oold-context` only for validation (`promoted_terms` marks a term as mapped without choosing); the selection itself is not in the library yet.
-- `transform.py` - RDF export/import under a selected set, including `@nest` shape bridging and `@reverse` inversion. Replaces the pre-spec `name*` alias notation still shipped as `oold.utils.transform`, so migrating it is a breaking change there.
-- `url_config.py` - URL-backed session state, ported from `opensemantic.base`, whose layering (it depends on `oold`) prevents importing it from there.
+- `mappings.py` and `transform.py` - mapping-set selection and the RDF transform: [OO-LD/oold-python#154](https://github.com/OO-LD/oold-python/pull/154). Once released, delete both here and import from `oold.utils`.
+- `url_config.py` - URL-backed session state: [opensemanticworld/panelini#43](https://github.com/opensemanticworld/panelini/issues/43). Ported from `opensemantic.base`, whose layering (it depends on `oold`) prevents importing it from there.
+
+The MonacoEditor dependency tracks the `monaco-editor-panel` branch of panelini until that panel is released; the browser build ships a wheel built from the same branch.

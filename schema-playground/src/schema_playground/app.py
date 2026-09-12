@@ -24,7 +24,7 @@ from schema_playground.columns import (
     schema_column,
 )
 from schema_playground.split import Pane, SplitColumns
-from schema_playground.state import PlaygroundState
+from schema_playground.state import PlaygroundState, meta_schema
 from schema_playground.mappings import chain, set_name
 from schema_playground.transform import JSON_LD, TURTLE
 
@@ -57,19 +57,21 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
         button_type="primary",
         width=200,
     )
-    turtle_editor = pn.widgets.CodeEditor(
+    from panelini.panels.monacoeditor import MonacoEditor
+
+    turtle_editor = MonacoEditor(
         value=state.pasted_rdf,
-        language="text",
+        language="plaintext",
+        schema_request="ignore",
         sizing_mode="stretch_width",
         height=EDITOR_HEIGHT - 60,
-        theme="github_light_default",
     )
-    jsonld_editor = pn.widgets.CodeEditor(
+    jsonld_editor = MonacoEditor(
         value="",
         language="json",
+        schema_request="ignore",
         sizing_mode="stretch_width",
         height=EDITOR_HEIGHT - 60,
-        theme="github_light_default",
     )
     tabs = pn.Tabs(("Turtle", turtle_editor), ("JSON-LD", jsonld_editor), sizing_mode="stretch_width")
     body = pn.Column(
@@ -267,11 +269,14 @@ def build(state: PlaygroundState | None = None) -> Any:
     log_card, _handler = log_panel()
     state = state or PlaygroundState()
     bind_url(state)
+    meta = meta_schema()
 
     panes = [
         Pane(
             "Source schema",
-            schema_column(state, "source_schema", "source_schema_error", lambda: _chain_of(state, "source_schema")),
+            schema_column(
+                state, "source_schema", "source_schema_error", lambda: _chain_of(state, "source_schema"), meta=meta
+            ),
         ),
         Pane(
             "Source instance",
@@ -282,11 +287,14 @@ def build(state: PlaygroundState | None = None) -> Any:
                 "source_graph",
                 "source_instance_error",
                 controls=rdf_controls(state),
+                schema_field="source_editor_schema",
             ),
         ),
         Pane(
             "Target schema",
-            schema_column(state, "target_schema", "target_schema_error", lambda: _chain_of(state, "target_schema")),
+            schema_column(
+                state, "target_schema", "target_schema_error", lambda: _chain_of(state, "target_schema"), meta=meta
+            ),
         ),
         Pane(
             "Transformed instance",
@@ -297,6 +305,7 @@ def build(state: PlaygroundState | None = None) -> Any:
                 "target_graph",
                 "bus_error",
                 readonly=True,
+                schema_field="target_editor_schema",
             ),
         ),
     ]

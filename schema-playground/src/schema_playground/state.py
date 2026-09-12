@@ -64,6 +64,46 @@ def ref_resolver(base: str | None) -> Callable[[str], dict[str, Any] | None]:
     return resolve
 
 
+def editor_schema(chain: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """A self-contained schema for an editor's inline validation.
+
+    The editor validates against exactly one document and follows no references, so the
+    resolved chain is inlined: each member contributes everything but its composition and
+    identity keywords, whose work the resolver has already done. JSON-LD and ``x-oold-*``
+    keywords ride along; the editor ignores what it does not know.
+    """
+    members = []
+    for member in chain:
+        if not isinstance(member, dict):
+            continue
+        cleaned = {k: v for k, v in member.items() if k not in ("allOf", "$schema", "$id")}
+        if cleaned:
+            members.append(cleaned)
+    if not members:
+        return None
+    if len(members) == 1:
+        return members[0]
+    return {"allOf": members}
+
+
+def meta_schema() -> dict[str, Any] | None:
+    """The newest OO-LD meta-schema oold ships, for inline validation of schema documents.
+
+    The base file is used because the entry file is only a reference to it. Its two remote
+    references (the 2020-12 meta-schema and the UI keywords) are skipped by the editor,
+    which never fetches; the locally defined ``x-oold-*`` keywords still validate.
+    """
+    try:
+        from importlib import resources
+
+        root = resources.files("oold.validation") / "meta"
+        latest = sorted(entry.name for entry in root.iterdir() if entry.is_dir())[-1]
+        return json.loads((root / latest / "oold-meta-schema-base.json").read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("no meta-schema for editor validation: %s", exc)
+        return None
+
+
 def schema_filename(schema: Any) -> str:
     """The filename a schema expects to be addressed by, taken from its ``$id``."""
     identifier = (schema or {}).get("$id") if isinstance(schema, dict) else None
@@ -160,6 +200,10 @@ class PlaygroundState(param.Parameterized):
     available_sets = param.List(default=[])
     source_graph = param.Dict(default={"nodes": [], "edges": []})
     target_graph = param.Dict(default={"nodes": [], "edges": []})
+    #: Self-contained schemas for the editors' inline (Monaco) validation, merged from the
+    #: resolved chain because the editor cannot follow references itself.
+    source_editor_schema = param.Dict(default=None, allow_None=True)
+    target_editor_schema = param.Dict(default=None, allow_None=True)
     source_schema_error = param.String(default="")
     source_instance_error = param.String(default="")
     target_schema_error = param.String(default="")
@@ -259,6 +303,8 @@ class PlaygroundState(param.Parameterized):
 
         with param.parameterized.batch_call_watchers(self):
             self.available_sets = sets
+            self.source_editor_schema = editor_schema(source_chain)
+            self.target_editor_schema = editor_schema(target_chain)
             self.source_rdf = source_rdf
             self.target_rdf = target_rdf
             self.target_instance = _as_instance(target_instance, target_schema)

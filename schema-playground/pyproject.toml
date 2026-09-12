@@ -8,7 +8,9 @@ dependencies = [
     # The released validator: validate_schema/validate_instance and the schema-derived frames.
     "oold[validation]>=0.20",
     "panel>=1.5",
-    "panelini>=0.11",
+    # The MonacoEditor panel (inline JSON-schema validation) is not in a panelini release
+    # yet; track the branch until it merges.
+    "panelini @ git+https://github.com/opensemanticworld/panelini.git@monaco-editor-panel",
     "param>=2",
     "pydantic>=2",
     # Imported directly here (the RDF pipeline and the YAML panes), not merely through oold.
@@ -29,6 +31,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/schema_playground"]
+
+[tool.hatch.metadata]
+# The panelini dependency is a git branch until MonacoEditor is released.
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

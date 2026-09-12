@@ -16,9 +16,12 @@ from typing import Any
 import panel as pn
 import param
 
+from panelini.panels.monacoeditor import MonacoEditor
+
 from schema_playground import config as cfg
 from schema_playground.graph import graph_data  # noqa: F401 - re-exported for convenience
 from schema_playground.terms import terms_table
+from schema_playground.transform import JSON_LD
 
 EDITOR_HEIGHT = 420
 
@@ -45,6 +48,8 @@ class DocumentEditor(pn.viewable.Viewer):
         language: str = "json",
         readonly: bool = False,
         height: int = EDITOR_HEIGHT,
+        schema_field: str | None = None,
+        json_schema: dict | None = None,
     ) -> None:
         super().__init__()
         self._state = state
@@ -52,17 +57,26 @@ class DocumentEditor(pn.viewable.Viewer):
         self._language = language
         self._writing = False
 
-        self._editor = pn.widgets.CodeEditor(
+        if schema_field is not None and json_schema is None:
+            json_schema = getattr(state, schema_field)
+        # schema_request="ignore": OO-LD documents declare their $schema, which the editor
+        # never fetches and would otherwise flag on every buffer.
+        self._editor = MonacoEditor(
             value=self._current_text(),
             language=language,
-            readonly=readonly,
+            read_only=readonly,
+            json_schema=json_schema if language == "json" else None,
+            schema_request="ignore",
             sizing_mode="stretch_width",
             height=height,
-            theme="github_light_default",
         )
         if not readonly:
             self._editor.param.watch(self._on_edit, "value")
         state.param.watch(self._on_state, field)
+        if schema_field is not None and language == "json":
+            state.param.watch(
+                lambda event: setattr(self._editor, "json_schema", event.new or None), schema_field
+            )
 
     def _document(self) -> Any:
         text, _ = cfg.resolve_source(getattr(self._state, self._field))
@@ -106,7 +120,7 @@ class DocumentEditor(pn.viewable.Viewer):
         finally:
             self._writing = False
 
-    def __panel__(self) -> pn.widgets.CodeEditor:
+    def __panel__(self) -> MonacoEditor:
         return self._editor
 
 
@@ -134,14 +148,24 @@ def _tabs(*panels: tuple[str, Any]) -> pn.Tabs:
     return pn.Tabs(*panels, sizing_mode="stretch_both", dynamic=False)
 
 
-def schema_column(state: param.Parameterized, field: str, error_field: str, chain_of: Callable[[], list]) -> pn.Column:
-    """A schema column: the document in two encodings, plus its reading as terms."""
+def schema_column(
+    state: param.Parameterized,
+    field: str,
+    error_field: str,
+    chain_of: Callable[[], list],
+    meta: dict | None = None,
+) -> pn.Column:
+    """A schema column: the document in two encodings, plus its reading as terms.
+
+    ``meta`` is the OO-LD meta-schema; the JSON editor validates the schema document against
+    it inline, so a misplaced keyword is flagged while typing rather than by the pipeline.
+    """
     terms = pn.bind(
         lambda _value: pn.pane.HTML(terms_table(chain_of()), sizing_mode="stretch_width"), state.param[field]
     )
     return pn.Column(
         _tabs(
-            ("JSON", DocumentEditor(state, field, "json")),
+            ("JSON", DocumentEditor(state, field, "json", json_schema=meta)),
             ("YAML", DocumentEditor(state, field, "yaml")),
             ("Terms", pn.Column(terms, scroll=True, height=EDITOR_HEIGHT)),
         ),
@@ -183,22 +207,32 @@ def instance_column(
     error_field: str,
     readonly: bool = False,
     controls: pn.viewable.Viewable | None = None,
+    schema_field: str | None = None,
 ) -> pn.Column:
-    """An instance column: the document, the RDF it exports as, and that graph drawn."""
-    rdf_view = pn.widgets.CodeEditor(
+    """An instance column: the document, the RDF it exports as, and that graph drawn.
+
+    ``schema_field`` names the state field carrying the chain's merged schema; the JSON
+    editor validates the instance against it inline, live with every schema edit.
+    """
+    rdf_view = MonacoEditor(
         value=getattr(state, rdf_field),
-        language="text",
-        readonly=True,
+        language="plaintext",
+        read_only=True,
+        schema_request="ignore",
         sizing_mode="stretch_width",
         height=EDITOR_HEIGHT,
-        theme="github_light_default",
     )
     state.param.watch(lambda event: setattr(rdf_view, "value", event.new), rdf_field)
+    # Turtle has no Monaco language in the bundle; JSON-LD is JSON and gets its tokenizer.
+    state.param.watch(
+        lambda event: setattr(rdf_view, "language", "json" if event.new == JSON_LD else "plaintext"),
+        "rdf_format",
+    )
 
     rdf_tab: Any = rdf_view if controls is None else pn.Column(controls, rdf_view, sizing_mode="stretch_width")
 
     panels = [
-        ("JSON", DocumentEditor(state, instance_field, "json", readonly=readonly)),
+        ("JSON", DocumentEditor(state, instance_field, "json", readonly=readonly, schema_field=schema_field)),
         ("YAML", DocumentEditor(state, instance_field, "yaml", readonly=readonly)),
         ("RDF", rdf_tab),
         ("Graph", graph_pane(state, graph_field)),
