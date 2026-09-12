@@ -7,14 +7,14 @@ not written on those lines.
 
 from oold.backend.document_store import SimpleDictDocumentStore
 from oold.backend.interface import SetResolverParam, set_resolver
-from oold.model._notation import OoldField, OoldModel
+from oold.model._notation import LinkList, OoldField, OoldModel
 
 
 class Person(OoldModel):
     id: str
     name: str | None = None
     type: str | None = "ex:Person"
-    knows: list["Person"] | None = OoldField()
+    knows: LinkList["Person"] = OoldField()
 
 
 Person.model_rebuild()
