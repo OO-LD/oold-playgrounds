@@ -34,7 +34,7 @@ def location(monkeypatch):
 
 
 def test_config_defaults_when_the_url_is_empty(location):
-    assert uc.UrlConfig(cfg.PlaygroundConfig).get_config().source_schema == cfg.SOURCE_SCHEMA
+    assert uc.UrlConfig(cfg.PlaygroundConfig).get_config().source_schemas == [cfg.SOURCE_SCHEMA]
 
 
 def test_config_round_trips_and_always_emits_compressed(location):
@@ -285,9 +285,12 @@ def test_a_graph_instance_exports_all_nodes_and_transforms():
     assert "Jane Doe" in state.source_rdf and "Joe Bloggs" in state.source_rdf
     assert state.source_instance_error == "", state.source_instance_error
 
-    transformed = json.loads(state.target_instance)
-    names = json.dumps(transformed)
-    assert "Jane Doe" in names and "Joe Bloggs" in names, transformed
+    # the multi-document fan-out: one emitted target document per entity, sorted by @id
+    assert len(state.target_instances) == 2, state.target_instances
+    emitted = [json.loads(doc) for doc in state.target_instances]
+    assert [d["full_name"] for d in emitted] == ["Jane Doe", "Joe Bloggs"], emitted
+    # the selected view shows the first of them
+    assert json.loads(state.target_instance)["full_name"] == "Jane Doe"
 
 
 def test_a_graph_node_error_is_reported_with_its_index():
@@ -328,3 +331,142 @@ def test_the_loading_overlay_follows_editor_readiness():
     for editor in main.select(MonacoEditor):
         editor.ready = True
     assert main.loading is False
+
+# -- several documents per column -------------------------------------------------
+
+
+ORG_SOURCE_SCHEMA = json.dumps(
+    {
+        "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+        "$id": "Organization.schema.json",
+        "title": "Organization",
+        "type": "object",
+        "@context": {
+            "schema": "https://schema.org/",
+            "id": "@id",
+            "type": "@type",
+            "name": "schema:name",
+        },
+        "x-oold-instance-rdf-type": ["schema:Organization"],
+        "properties": {
+            "id": {"type": "string", "format": "iri"},
+            "name": {"type": "string"},
+        },
+    },
+    indent=2,
+)
+
+ORG_TARGET_SCHEMA = json.dumps(
+    {
+        "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+        "$id": "Team.schema.json",
+        "title": "Team",
+        "type": "object",
+        "@context": {
+            "schema": "https://schema.org/",
+            "id": "@id",
+            "type": "@type",
+            "name": "schema:name",
+            "members": {"@reverse": "schema:worksFor", "@type": "@id"},
+        },
+        "x-oold-instance-rdf-type": ["schema:Organization"],
+        "properties": {
+            "id": {"type": "string", "format": "iri"},
+            "name": {"type": "string"},
+            "members": {
+                "type": "array",
+                "items": {"type": "object", "properties": {"name": {"type": "string"}}},
+            },
+        },
+    },
+    indent=2,
+)
+
+
+def _person_doc(identifier, name):
+    return json.dumps(
+        {
+            "@context": "Person.schema.json",
+            "$schema": "Person.schema.json",
+            "id": identifier,
+            "name": name,
+            "works_for": "https://example.org/orgs/acme",
+        },
+        indent=2,
+    )
+
+
+ORG_DOC = json.dumps(
+    {
+        "@context": "Organization.schema.json",
+        "$schema": "Organization.schema.json",
+        "id": "https://example.org/orgs/acme",
+        "name": "ACME",
+    },
+    indent=2,
+)
+
+
+def test_many_to_many_documents_flow_through_one_graph():
+    """Two persons and an org, each processed by its own schema; two target readings emit
+    their documents side by side, sorted by @id."""
+    state = PlaygroundState(
+        source_schemas=[cfg.SOURCE_SCHEMA, ORG_SOURCE_SCHEMA],
+        source_instances=[
+            _person_doc("https://example.org/people/jane", "Jane Doe"),
+            _person_doc("https://example.org/people/joe", "Joe Bloggs"),
+            ORG_DOC,
+        ],
+        target_schemas=[cfg.TARGET_SCHEMA, ORG_TARGET_SCHEMA],
+    )
+
+    assert state.source_instance_error == "", state.source_instance_error
+    # the merged graph carries all three documents
+    assert "Jane Doe" in state.source_rdf and "ACME" in state.source_rdf
+
+    emitted = [json.loads(doc) for doc in state.target_instances]
+    # Employee reading: the two persons; Team reading: the org with both members nested
+    employees = [d for d in emitted if "full_name" in d]
+    teams = [d for d in emitted if "members" in d]
+    assert [d["full_name"] for d in employees] == ["Jane Doe", "Joe Bloggs"], emitted
+    assert len(teams) == 1, emitted
+    member_names = sorted(m.get("name", "") for m in teams[0]["members"] if isinstance(m, dict))
+    assert member_names == ["Jane Doe", "Joe Bloggs"], teams
+
+
+def test_each_instance_is_processed_by_the_schema_it_names():
+    """The org document validates against the org schema, not the person schema."""
+    state = PlaygroundState(
+        source_schemas=[cfg.SOURCE_SCHEMA, ORG_SOURCE_SCHEMA],
+        source_instances=[ORG_DOC],
+    )
+    # the org has no works_for and Person would not complain either, so break it org-wise:
+    broken = json.loads(ORG_DOC)
+    broken["name"] = 123
+    state.source_instances = [json.dumps(broken, indent=2)]
+    assert "not of type" in state.source_instance_error, state.source_instance_error
+
+
+def test_editing_the_selected_document_lands_in_its_list_slot():
+    state = PlaygroundState(
+        source_instances=[
+            _person_doc("https://example.org/people/jane", "Jane Doe"),
+            _person_doc("https://example.org/people/joe", "Joe Bloggs"),
+        ],
+    )
+    state.source_instance_idx = 1
+    assert "Joe Bloggs" in state.source_instance
+
+    edited = state.source_instance.replace("Joe Bloggs", "Joseph Bloggs")
+    state.source_instance = edited
+
+    assert "Joseph Bloggs" in state.source_instances[1]
+    assert "Jane Doe" in state.source_instances[0]
+
+
+def test_document_labels_use_id_and_shorten():
+    from schema_playground.state import document_label
+
+    assert document_label(cfg.SOURCE_SCHEMA, "x") == "Person.schema.json"
+    assert document_label(_person_doc("https://example.org/people/jane", "J"), "x") == "jane"
+    assert document_label("{broken", "fallback") == "fallback"

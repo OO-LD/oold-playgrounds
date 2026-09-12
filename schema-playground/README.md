@@ -17,10 +17,12 @@ Then open <http://localhost:5006/app>.
 
 | Column | Content |
 | --- | --- |
-| Source schema | the document as JSON or YAML, and its **Terms** table: what each term maps to and what else it is known as |
-| Source instance | the document, the RDF it exports as, and that graph drawn |
-| Target schema | a second schema, in the same three views |
-| Transformed instance | the same data read through the target schema |
+| Source schemas | schema documents as JSON or YAML, each with its **Terms** table: what each term maps to and what else it is known as |
+| Source instances | instance documents, the merged RDF they export as, and that graph drawn |
+| Target schemas | the schemas of the other reading, in the same three views |
+| Transformed instances | the documents each target schema emits from the graph |
+
+Each column holds any number of documents: a selector shows them by their `$id` (schemas) or `@id` (instances), and `+`/`-` add or remove one. Every source instance is processed by the schema its own `$schema` names; all exports merge into one graph; each target schema frames that graph and may emit several documents, sorted by `@id`.
 
 Any column can be collapsed; the rest take the space. Validation runs twice: the JSON and YAML editors ([panelini MonacoEditor](https://github.com/opensemanticworld/panelini/pull/60)) validate inline while typing, with schema-driven completion - instances against the resolved schema chain, schemas against the OO-LD meta-schema plus the full 2020-12 vocabulary (shipped by `jsonschema`, resolved offline) - and the full `oold validate` pipeline reports beneath the editor that produced the problem. A `$schema` pointing at an external URL also works: known metas resolve from the offline store, anything else is fetched live (CORS permitting).
 
@@ -34,9 +36,9 @@ The right-hand side is not a second editor; it is the same data read through ano
 
 The centre **Paste RDF** panel (Turtle or JSON-LD) replaces the source columns as the input for the right-hand side, which keeps the data flow one-directional and free of update loops.
 
-## Several entities in one document
+## Several entities, one graph
 
-JSON has no document-stream notation (JSON Lines exists, but a stream is not a JSON document, so every JSON tool rejects it); the JSON-LD container for several entities is a single document with a `@graph` array, whose nodes reference each other by `id`. The playground supports it end to end: each node is validated against the schema on its own (errors name the node, `@graph[1] ...`), the whole graph exports and transforms, and re-nesting on import happens by framing. In YAML you may write a document stream (`---` separators); the playground reads it as a `@graph`.
+Multiple documents per column are the primary form (see above): separate files, related by IRI references, exactly as they would live in a repository. Alternatively one document can hold several entities: JSON has no document-stream notation (JSON Lines exists, but a stream is not a JSON document, so every JSON tool rejects it), so the JSON-LD container for that is a `@graph` array, whose nodes reference each other by `id`. Both forms flow the same way: each node validates on its own (errors name the node, `@graph[1] ...`), everything exports into the one merged graph, and each target schema frames that graph back into documents - two persons and their organization read equally well as person documents (`works_for` kept as a reference) or as one organization with the persons nested through the inverse relation. In YAML a document stream (`---` separators) is read as a `@graph`.
 
 Every editable field accepts either a document or a URL to fetch it from, e.g. `https://oo-ld.org/latest/schemas/Person.schema.json`. The session travels compressed in the URL, so a link reproduces what you are looking at.
 

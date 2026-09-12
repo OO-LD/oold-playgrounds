@@ -194,9 +194,12 @@ class PlaygroundConfig(BaseModel):
 
     model_config = ConfigDict(validate_assignment=True)
 
-    source_schema: str = SOURCE_SCHEMA
-    source_instance: str = SOURCE_INSTANCE
-    target_schema: str = TARGET_SCHEMA
+    source_schemas: list[str] = [SOURCE_SCHEMA]
+    source_instances: list[str] = [SOURCE_INSTANCE]
+    target_schemas: list[str] = [TARGET_SCHEMA]
+    source_schema_idx: int = 0
+    source_instance_idx: int = 0
+    target_schema_idx: int = 0
     pasted_rdf: str = ""
     #: Whether the paste field owns the bus. When true the source columns are collapsed,
     #: because they no longer feed anything.

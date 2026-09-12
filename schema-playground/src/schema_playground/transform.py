@@ -149,36 +149,70 @@ def _id_keys(context: Any) -> frozenset[str]:
     return frozenset(keys)
 
 
+def _property_types(subschema: Any) -> list[str] | None:
+    """The declared instance ``rdf:type`` of a property's embedded objects, if any.
+
+    Looks at the property schema and, for arrays, its ``items``. Only inline declarations
+    are seen; a ``$ref`` to another schema is the resolver's business and by that point the
+    referenced keywords are inlined.
+    """
+    if not isinstance(subschema, dict):
+        return None
+    for candidate in (subschema, subschema.get("items")):
+        if isinstance(candidate, dict):
+            types = candidate.get("x-oold-instance-rdf-type")
+            if isinstance(types, list) and types:
+                return list(types)
+    return None
+
+
 def _materialize_types(document: dict[str, Any], schemas: list[dict[str, Any]]) -> None:
-    """Give untyped nodes the schema's declared ``rdf:type``.
+    """Give untyped nodes the declared ``rdf:type``, nested ones included.
 
     The same rule the validator's roundtrip applies: ``x-oold-instance-rdf-type`` is
     materialised as ``@type`` unless the node already carries one. Without it a node is
-    invisible to any type-filtering frame, so a multi-node ``@graph`` import would come back
-    empty rather than re-nested.
+    invisible to any type-filtering frame, so a multi-node ``@graph`` import - or a person
+    nested inside an organization - would come back empty rather than re-nested. Nested
+    objects take the type their property's schema declares.
+
+    Everything written to is copied first: the document is a shallow copy of the caller's
+    instance, and writing ``@type`` into shared nodes would hand the validator - and the
+    editor - a document the user never wrote.
     """
     try:
         from oold.validation.frame import instance_rdf_types
     except ImportError:
         return
-    types = instance_rdf_types(schemas[-1]) if schemas else None
-    if not types:
+    if not schemas:
         return
+    types = instance_rdf_types(schemas[-1])
+    properties: dict[str, Any] = {}
+    for member in schemas:
+        if isinstance(member, dict):
+            properties.update(member.get("properties") or {})
 
-    def ensure(node: Any) -> None:
-        if isinstance(node, dict) and "type" not in node and "@type" not in node:
-            node["@type"] = list(types)
+    def typed(node: Any, declared: list[str] | None) -> Any:
+        if not isinstance(node, dict):
+            return node
+        node = dict(node)
+        if declared and "type" not in node and "@type" not in node:
+            node["@type"] = list(declared)
+        for key, value in list(node.items()):
+            nested = _property_types(properties.get(key))
+            if nested is None:
+                continue
+            if isinstance(value, list):
+                node[key] = [typed(item, nested) for item in value]
+            elif isinstance(value, dict):
+                node[key] = typed(value, nested)
+        return node
 
     graph = document.get("@graph")
     if isinstance(graph, list):
-        # The document is a shallow copy of the caller's instance: the nodes inside @graph
-        # are still shared, and writing @type into them would hand the validator - and the
-        # editor - a document the user never wrote.
-        document["@graph"] = [dict(node) if isinstance(node, dict) else node for node in graph]
-        for node in document["@graph"]:
-            ensure(node)
+        document["@graph"] = [typed(node, types) for node in graph]
     else:
-        ensure(document)
+        for key, value in typed(document, types).items():
+            document[key] = value
 
 
 def _is_graph_document(document: Any) -> bool:
@@ -259,15 +293,39 @@ def from_rdf(
     document = jsonld.from_rdf(nquads, {"format": NQUADS, "useNativeTypes": True})
 
     if frame is None and _is_graph_document(document) and schemas:
-        from oold.validation.frame import schema_to_frame
-
-        frame = schema_to_frame(schemas[-1], context)
+        frame = reference_preserving_frame(schemas, context)
 
     if frame is not None:
         result = jsonld.frame(document, frame, {**(options or {}), "omitDefault": True})
     else:
         result = jsonld.compact(document, context, {**(options or {})})
     return _strip_blank_ids(result, _id_keys(context))
+
+
+def reference_preserving_frame(
+    schemas: list[dict[str, Any]], context: Any
+) -> dict[str, Any] | None:
+    """The schema-derived frame, with reference-valued properties kept as references.
+
+    Framing embeds any referenced node it finds in the graph, so without ``@embed: @never``
+    a person's ``works_for`` would absorb the organization's whole node. A property whose
+    schema says ``format: iri-reference`` (or ``iri``) is a reference by declaration.
+    """
+    try:
+        from oold.validation.frame import schema_to_frame
+    except ImportError:
+        return None
+    if not schemas:
+        return None
+    frame = schema_to_frame(schemas[-1], context)
+    for member in schemas:
+        if not isinstance(member, dict):
+            continue
+        for name, subschema in (member.get("properties") or {}).items():
+            if isinstance(subschema, dict) and subschema.get("format") in ("iri-reference", "iri"):
+                if name not in ("id", "@id") and name not in frame:
+                    frame[name] = {"@embed": "@never"}
+    return frame
 
 
 def transform(

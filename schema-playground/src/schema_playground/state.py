@@ -242,10 +242,56 @@ def validate(document: Any, kind: str, schema: Any = None, chain: list | None = 
     return "\n".join(f"{c.id}: {c.message or c.status}" for c in failures)
 
 
-class PlaygroundState(param.Parameterized):
-    """The session: four documents, a bus, and the views derived from them."""
+def document_label(text: str, fallback: str) -> str:
+    """What a document is called in a selector: a schema's ``$id``, an instance's ``@id``."""
+    from schema_playground.graph import shorten
 
-    # -- inputs. Each may hold a URL or the document itself.
+    resolved, error = cfg.resolve_source(text)
+    document, parse_error = cfg.parse_document(resolved) if not error else (None, error)
+    if isinstance(document, dict):
+        for key in ("$id", "@id", "id"):
+            value = document.get(key)
+            if isinstance(value, str) and value.strip():
+                return shorten(value)[:40]
+    return fallback
+
+
+def match_schema(instance: Any, schema_texts: list[str]) -> int:
+    """The index of the schema an instance's ``$schema`` names, first schema as fallback.
+
+    Matched by the tail of the schema's ``$id``: instances name their schema relatively
+    (``Person.schema.json``) or absolutely, and the ``$id`` may be either too.
+    """
+    declared = instance.get("$schema") if isinstance(instance, dict) else None
+    if isinstance(declared, str) and declared.strip():
+        tail = declared.rstrip("/").rsplit("/", 1)[-1]
+        for index, text in enumerate(schema_texts):
+            resolved, error = cfg.resolve_source(text)
+            document, _ = cfg.parse_document(resolved) if not error else (None, None)
+            identifier = document.get("$id") if isinstance(document, dict) else None
+            if isinstance(identifier, str) and identifier.rstrip("/").rsplit("/", 1)[-1] == tail:
+                return index
+    return 0
+
+
+class PlaygroundState(param.Parameterized):
+    """The session: documents on both sides, a bus, and the views derived from them.
+
+    Documents live in lists; the scalar params (``source_schema`` and friends) are the
+    *selected* document's view, kept in sync both ways so the editors bind to a stable
+    field while ``+``/``-``/selection manage the lists.
+    """
+
+    # -- the documents. Each entry may hold a URL or the document itself.
+    source_schemas = param.List(default=None, item_type=str)
+    source_instances = param.List(default=None, item_type=str)
+    target_schemas = param.List(default=None, item_type=str)
+    source_schema_idx = param.Integer(default=0)
+    source_instance_idx = param.Integer(default=0)
+    target_schema_idx = param.Integer(default=0)
+    target_instance_idx = param.Integer(default=0)
+
+    # -- the selected document, as the editors see it
     source_schema = param.String(default=cfg.SOURCE_SCHEMA)
     source_instance = param.String(default=cfg.SOURCE_INSTANCE)
     target_schema = param.String(default=cfg.TARGET_SCHEMA)
@@ -256,6 +302,7 @@ class PlaygroundState(param.Parameterized):
     mapping_set = param.String(default="")
 
     # -- derived. Never appear in the dependency list above, which is what keeps this acyclic.
+    target_instances = param.List(default=[], item_type=str)
     source_rdf = param.String(default="")
     target_instance = param.String(default="")
     target_rdf = param.String(default="")
@@ -273,11 +320,90 @@ class PlaygroundState(param.Parameterized):
 
     def __init__(self, compute: bool = True, **params: Any) -> None:
         super().__init__(**params)
+        # The scalar params seed the lists (and vice versa), so both single-document use -
+        # every existing caller - and list-based construction end up consistent. Guarded:
+        # assigning one list fires _sync_views, which would wipe the scalars the *other*
+        # lists have not been seeded from yet.
+        self._syncing = True
+        try:
+            if self.source_schemas is None:
+                self.source_schemas = [self.source_schema]
+            if self.source_instances is None:
+                self.source_instances = [self.source_instance]
+            if self.target_schemas is None:
+                self.target_schemas = [self.target_schema]
+        finally:
+            self._syncing = False
+        self._sync_views()
         # A server session can defer the first pass to after the page is delivered: the
         # validators and the RDF pipeline cost seconds, and running them before the document
         # exists means seconds of blank page instead of a loading indicator.
         if compute:
             self.recompute()
+
+    @staticmethod
+    def _view(documents: list[str], index: int) -> str:
+        if not documents:
+            return ""
+        return documents[max(0, min(index, len(documents) - 1))]
+
+    def _schema_chains(self, texts: list[str]) -> list[list[dict[str, Any]]]:
+        chains: list[list[dict[str, Any]]] = []
+        for text in texts or []:
+            document, error = self._load(text)
+            if isinstance(document, dict) and not error:
+                chains.append(chain(document, ref_resolver(cfg.source_base(text))))
+            else:
+                chains.append([])
+        return chains
+
+    @param.depends(
+        "source_schemas",
+        "source_instances",
+        "target_schemas",
+        "source_schema_idx",
+        "source_instance_idx",
+        "target_schema_idx",
+        "target_instance_idx",
+        watch=True,
+    )
+    def _sync_views(self) -> None:
+        """The selected documents, mirrored into the scalar params the editors bind to."""
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            with param.parameterized.batch_call_watchers(self):
+                self.source_schema = self._view(self.source_schemas, self.source_schema_idx)
+                self.source_instance = self._view(self.source_instances, self.source_instance_idx)
+                self.target_schema = self._view(self.target_schemas, self.target_schema_idx)
+                self.target_instance = self._view(self.target_instances, self.target_instance_idx)
+        finally:
+            self._syncing = False
+
+    @param.depends("source_schema", "source_instance", "target_schema", watch=True)
+    def _sync_lists(self) -> None:
+        """An edit in an editor lands in the selected slot of its list."""
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            for list_name, index_name, value in (
+                ("source_schemas", "source_schema_idx", self.source_schema),
+                ("source_instances", "source_instance_idx", self.source_instance),
+                ("target_schemas", "target_schema_idx", self.target_schema),
+            ):
+                documents = list(getattr(self, list_name) or [])
+                index = max(0, min(getattr(self, index_name), len(documents) - 1)) if documents else 0
+                if not documents:
+                    documents = [value]
+                elif documents[index] != value:
+                    documents[index] = value
+                else:
+                    continue
+                setattr(self, list_name, documents)
+        finally:
+            self._syncing = False
 
     def _load(self, value: str) -> tuple[Any, str]:
         """A field's document and the first problem with it, if any."""
@@ -293,9 +419,9 @@ class PlaygroundState(param.Parameterized):
         return chain(schema, ref_resolver(cfg.source_base(getattr(self, field))))
 
     @param.depends(
-        "source_schema",
-        "source_instance",
-        "target_schema",
+        "source_schemas",
+        "source_instances",
+        "target_schemas",
         "pasted_rdf",
         "use_paste",
         "paste_format",
@@ -304,35 +430,57 @@ class PlaygroundState(param.Parameterized):
         watch=True,
     )
     def recompute(self) -> None:
-        """Recalculate every derived field, left to right."""
-        source_schema, schema_error = self._load(self.source_schema)
-        source_instance, instance_error = self._load(self.source_instance)
-        target_schema, target_error = self._load(self.target_schema)
+        """Recalculate every derived field, left to right, over every document."""
+        schema_texts = list(self.source_schemas or [])
+        instance_texts = list(self.source_instances or [])
+        target_texts = list(self.target_schemas or [])
 
-        source_chain = self._chain(source_schema, "source_schema")
-        target_chain = self._chain(target_schema, "target_schema")
+        source_chains = self._schema_chains(schema_texts)
+        target_chains = self._schema_chains(target_texts)
 
-        sets = mapping_sets(source_chain) if source_chain else []
+        sets = sorted({s for one_chain in source_chains for s in mapping_sets(one_chain)})
         set_id = self.mapping_set or None
         if set_id and set_id not in sets:
             set_id = None
 
-        # -- the left-hand export
+        # -- the left-hand export: every instance through the schema its $schema names
         left_nquads = ""
+        export_errors: list[str] = []
+        instance_errors: list[str] = []
+        selected_instance_error = ""
+        for index, text in enumerate(instance_texts):
+            instance, error = self._load(text)
+            label = document_label(text, f"instance {index}")
+            schema_index = match_schema(instance, schema_texts)
+            one_chain = source_chains[schema_index] if source_chains else []
+            doc_error = error or ""
+            if not doc_error and one_chain and isinstance(instance, dict):
+                try:
+                    left_nquads += to_rdf(instance, one_chain, set_id=set_id, format=NQUADS)
+                except Exception as exc:
+                    export_errors.append(f"{label}: export failed: {exc}")
+                    logger.warning("export of %s failed: %s", label, exc)
+                schema_doc, _ = self._load(schema_texts[schema_index]) if schema_texts else (None, "")
+                doc_error = doc_error or validate(instance, "instance", schema_doc, chain=one_chain)
+            if doc_error:
+                instance_errors.append(f"{label}: {doc_error}" if len(instance_texts) > 1 else doc_error)
+            if index == min(self.source_instance_idx, len(instance_texts) - 1):
+                selected_instance_error = doc_error
+        if left_nquads:
+            logger.info(
+                "exported %d triples from %d document(s) under %s",
+                _triples(left_nquads),
+                len(instance_texts),
+                set_name(set_id) if set_id else "the consensus reading",
+            )
+
+        # the RDF pane shows the merged export in the chosen serialization
         source_rdf = ""
-        export_error = ""
-        if source_chain and isinstance(source_instance, dict) and not instance_error:
+        if left_nquads:
             try:
-                left_nquads = to_rdf(source_instance, source_chain, set_id=set_id, format=NQUADS)
-                source_rdf = to_rdf(source_instance, source_chain, set_id=set_id, format=self.rdf_format)
-                logger.info(
-                    "exported %d triples under %s",
-                    _triples(left_nquads),
-                    set_name(set_id) if set_id else "the consensus reading",
-                )
+                source_rdf = _reserialize(left_nquads, self.rdf_format, source_chains[0] if source_chains else [])
             except Exception as exc:
-                export_error = f"export failed: {exc}"
-                logger.warning("export failed: %s", exc)
+                export_errors.append(f"serialization failed: {exc}")
 
         # -- whoever owns the bus supplies it; the paste field replaces the left-hand export
         bus_error = ""
@@ -348,39 +496,70 @@ class PlaygroundState(param.Parameterized):
                 bus = ""
         else:
             bus = left_nquads
-            bus_error = export_error
+            bus_error = "; ".join(export_errors)
 
-        # -- the right-hand import, the same code path for both bus owners
-        target_instance: Any = None
+        # -- the right-hand import: each target schema frames the bus into its documents
+        emitted: list[str] = []
         target_rdf = ""
-        if bus and target_chain:
-            try:
-                target_instance = from_rdf(bus, target_chain, format=NQUADS)
-                target_rdf = _reserialize(bus, self.rdf_format, target_chain)
+        if bus:
+            for target_index, one_chain in enumerate(target_chains):
+                if not one_chain:
+                    continue
+                target_doc = one_chain[-1]
+                try:
+                    result = from_rdf(bus, one_chain, format=NQUADS)
+                except Exception as exc:
+                    bus_error = bus_error or f"import failed: {exc}"
+                    logger.warning("import via target %d failed: %s", target_index, exc)
+                    continue
+                nodes = result.get("@graph") if isinstance(result, dict) else None
+                if not isinstance(nodes, list):
+                    nodes = [result] if isinstance(result, dict) else []
+                nodes = [n for n in nodes if isinstance(n, dict) and set(n) - {"@context"}]
+                nodes.sort(key=lambda n: str(n.get("id", n.get("@id", ""))))
+                for node in nodes:
+                    emitted.append(_as_instance(node, target_doc))
                 logger.info(
-                    "imported into %s",
-                    target_schema.get("title", "the target schema")
-                    if isinstance(target_schema, dict)
-                    else "the target schema",
+                    "imported %d document(s) into %s",
+                    len(nodes),
+                    target_doc.get("title", f"target {target_index}"),
                 )
-            except Exception as exc:
-                bus_error = bus_error or f"import failed: {exc}"
-                logger.warning("import failed: %s", exc)
+            if target_chains and target_chains[0]:
+                try:
+                    target_rdf = _reserialize(bus, self.rdf_format, target_chains[0])
+                except Exception:
+                    target_rdf = bus
+
+        selected_schema, selected_schema_load_error = self._load(self.source_schema)
+        selected_target, selected_target_load_error = self._load(self.target_schema)
+        selected_source_chain = (
+            source_chains[min(self.source_schema_idx, len(source_chains) - 1)] if source_chains else []
+        )
+        selected_target_chain = (
+            target_chains[min(self.target_schema_idx, len(target_chains) - 1)] if target_chains else []
+        )
+        schema_error = selected_schema_load_error or validate(selected_schema, "schema", chain=selected_source_chain)
+        target_error = selected_target_load_error or validate(selected_target, "schema", chain=selected_target_chain)
 
         with param.parameterized.batch_call_watchers(self):
             self.available_sets = sets
-            self.source_editor_schema = editor_schema(source_chain)
-            self.target_editor_schema = editor_schema(target_chain)
+            # inline validation follows the schema the selected instance is processed by
+            selected_instance, _ = self._load(self.source_instance)
+            matched = match_schema(selected_instance, schema_texts)
+            self.source_editor_schema = editor_schema(source_chains[matched] if source_chains else [])
+            self.target_editor_schema = editor_schema(selected_target_chain)
             self.source_rdf = source_rdf
             self.target_rdf = target_rdf
-            self.target_instance = _as_instance(target_instance, target_schema)
+            self.target_instances = emitted
+            self.target_instance_idx = min(self.target_instance_idx, max(0, len(emitted) - 1))
+            self.target_instance = self._view(emitted, self.target_instance_idx)
             self.source_graph = graph_data(left_nquads)
             self.target_graph = graph_data(bus)
-            self.source_schema_error = schema_error or validate(source_schema, "schema", chain=source_chain)
-            self.source_instance_error = instance_error or validate(
-                source_instance, "instance", source_schema, chain=source_chain
+            self.source_schema_error = schema_error
+            self.source_instance_error = selected_instance_error or (
+                "; ".join(instance_errors) if instance_errors and len(instance_texts) > 1 else ""
             )
-            self.target_schema_error = target_error or validate(target_schema, "schema", chain=target_chain)
+            self.target_schema_error = target_error
             self.bus_error = bus_error
 
 

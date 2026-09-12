@@ -25,14 +25,14 @@ from schema_playground.columns import (
     schema_column,
 )
 from schema_playground.split import Pane, SplitColumns
-from schema_playground.state import PlaygroundState, meta_schema, meta_store
+from schema_playground.state import PlaygroundState, document_label, meta_schema, meta_store
 from schema_playground.mappings import chain, set_name
 from schema_playground.transform import JSON_LD, TURTLE
 
 logger = logging.getLogger(__name__)
 
 TITLE = "OO-LD Playground"
-SOURCE_PANES = ("Source schema", "Source instance")
+SOURCE_PANES = ("Source schemas", "Source instances")
 
 
 def _chain_of(state: PlaygroundState, field: str) -> list[dict[str, Any]]:
@@ -120,6 +120,100 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
         margin=(0, 4),
     )
     return toolbar, body
+
+
+NEW_SCHEMA_TEMPLATE = """{
+  "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+  "$id": "New.schema.json",
+  "title": "New",
+  "type": "object",
+  "@context": {
+    "schema": "https://schema.org/",
+    "id": "@id",
+    "name": "schema:name"
+  },
+  "properties": {
+    "id": {"type": "string", "format": "iri"},
+    "name": {"type": "string"}
+  }
+}"""
+
+
+def _new_instance_template(state: PlaygroundState) -> str:
+    """A stub pointing at the currently selected schema, so it processes immediately."""
+    import json as _json
+
+    schema_text, _ = cfg.resolve_source(state.source_schema)
+    document, _ = cfg.parse_document(schema_text)
+    identifier = document.get("$id") if isinstance(document, dict) else None
+    identifier = identifier if isinstance(identifier, str) else "New.schema.json"
+    return _json.dumps(
+        {"@context": identifier, "$schema": identifier, "id": "https://example.org/things/new"},
+        indent=2,
+    )
+
+
+def document_selector(
+    state: PlaygroundState,
+    list_field: str,
+    index_field: str,
+    kind: str,
+    template: Any = None,
+) -> pn.Row:
+    """The document chooser above a column: label per document, plus add and remove.
+
+    Labels are a schema's ``$id`` or an instance's ``@id``, shortened; ``template`` supplies
+    the content of an added document (a callable receives the state), and without one the
+    list is read-only (the transformed side, whose documents are emitted, not authored).
+    """
+    select = pn.widgets.Select(name="", options={f"{kind} 0": 0}, value=0, width=220)
+    add = pn.widgets.Button(name="+", width=32, button_type="light", description=f"Add a {kind}")
+    remove = pn.widgets.Button(name="-", width=32, button_type="light", description=f"Remove this {kind}")
+
+    def refresh(*_events: Any) -> None:
+        documents = list(getattr(state, list_field) or [])
+        options: dict[str, int] = {}
+        for index, text in enumerate(documents):
+            label = document_label(text, f"{kind} {index}")
+            while label in options:
+                label += " "
+            options[label] = index
+        select.options = options or {f"{kind} 0": 0}
+        current = getattr(state, index_field)
+        values = list(select.options.values())
+        select.value = current if current in values else (values[0] if values else 0)
+        remove.disabled = len(documents) <= 1
+
+    def on_select(event: Any) -> None:
+        if event.new is not None and event.new != getattr(state, index_field):
+            setattr(state, index_field, event.new)
+
+    def on_add(_event: Any) -> None:
+        documents = list(getattr(state, list_field) or [])
+        content = template(state) if callable(template) else template
+        documents.append(content)
+        setattr(state, list_field, documents)
+        setattr(state, index_field, len(documents) - 1)
+
+    def on_remove(_event: Any) -> None:
+        documents = list(getattr(state, list_field) or [])
+        if len(documents) <= 1:
+            return
+        index = min(getattr(state, index_field), len(documents) - 1)
+        del documents[index]
+        setattr(state, index_field, max(0, index - 1))
+        setattr(state, list_field, documents)
+
+    refresh()
+    state.param.watch(refresh, [list_field, index_field])
+    select.param.watch(on_select, "value")
+    add.on_click(on_add)
+    remove.on_click(on_remove)
+
+    widgets: list[Any] = [select]
+    if template is not None:
+        widgets += [add, remove]
+    return pn.Row(*widgets, sizing_mode="stretch_width", margin=(0, 2))
 
 
 def rdf_controls(state: PlaygroundState) -> pn.Row:
@@ -225,9 +319,12 @@ def log_panel() -> tuple[pn.Card, logging.Handler]:
 #: The state fields that make up a shareable session. Derived fields are left out: they are
 #: recomputed from these, so putting them in the URL would only make the link longer.
 SESSION_FIELDS = (
-    "source_schema",
-    "source_instance",
-    "target_schema",
+    "source_schemas",
+    "source_instances",
+    "target_schemas",
+    "source_schema_idx",
+    "source_instance_idx",
+    "target_schema_idx",
     "pasted_rdf",
     "use_paste",
     "paste_format",
@@ -342,49 +439,67 @@ def build(state: PlaygroundState | None = None) -> Any:
 
     panes = [
         Pane(
-            "Source schema",
-            schema_column(
-                state,
-                "source_schema",
-                "source_schema_error",
-                lambda: _chain_of(state, "source_schema"),
-                meta=meta,
-                store=store,
+            "Source schemas",
+            pn.Column(
+                document_selector(state, "source_schemas", "source_schema_idx", "schema", NEW_SCHEMA_TEMPLATE),
+                schema_column(
+                    state,
+                    "source_schema",
+                    "source_schema_error",
+                    lambda: _chain_of(state, "source_schema"),
+                    meta=meta,
+                    store=store,
+                ),
+                sizing_mode="stretch_both",
             ),
         ),
         Pane(
-            "Source instance",
-            instance_column(
-                state,
-                "source_instance",
-                "source_rdf",
-                "source_graph",
-                "source_instance_error",
-                controls=rdf_controls(state),
-                schema_field="source_editor_schema",
+            "Source instances",
+            pn.Column(
+                document_selector(
+                    state, "source_instances", "source_instance_idx", "instance", _new_instance_template
+                ),
+                instance_column(
+                    state,
+                    "source_instance",
+                    "source_rdf",
+                    "source_graph",
+                    "source_instance_error",
+                    controls=rdf_controls(state),
+                    schema_field="source_editor_schema",
+                ),
+                sizing_mode="stretch_both",
             ),
         ),
         Pane(
-            "Target schema",
-            schema_column(
-                state,
-                "target_schema",
-                "target_schema_error",
-                lambda: _chain_of(state, "target_schema"),
-                meta=meta,
-                store=store,
+            "Target schemas",
+            pn.Column(
+                document_selector(state, "target_schemas", "target_schema_idx", "schema", NEW_SCHEMA_TEMPLATE),
+                schema_column(
+                    state,
+                    "target_schema",
+                    "target_schema_error",
+                    lambda: _chain_of(state, "target_schema"),
+                    meta=meta,
+                    store=store,
+                ),
+                sizing_mode="stretch_both",
             ),
         ),
         Pane(
-            "Transformed instance",
-            instance_column(
-                state,
-                "target_instance",
-                "target_rdf",
-                "target_graph",
-                "bus_error",
-                readonly=True,
-                schema_field="target_editor_schema",
+            "Transformed instances",
+            pn.Column(
+                document_selector(state, "target_instances", "target_instance_idx", "document"),
+                instance_column(
+                    state,
+                    "target_instance",
+                    "target_rdf",
+                    "target_graph",
+                    "bus_error",
+                    readonly=True,
+                    schema_field="target_editor_schema",
+                ),
+                sizing_mode="stretch_both",
             ),
         ),
     ]

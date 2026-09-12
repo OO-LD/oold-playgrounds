@@ -10,15 +10,16 @@ that, on the example of two persons working at one organization:
   the inverse relation (``employees`` is the ``@reverse`` of ``works_for``);
 * one to many: a single nested org document unrolls into person documents.
 
-Two findings these tests pin down, both prerequisites for the UI:
+Two findings shaped the transform and are pinned here:
 
 * a type-filtering frame embeds any referenced node it finds, so a reference-valued property
-  (``works_for``) absorbs the organization unless the frame says ``"@embed": "@never"`` for
-  it - deriving that from ``format: iri-reference`` belongs in ``schema_to_frame`` upstream;
-* only the document root gets its declared ``rdf:type`` materialized on export, so nodes
-  nested under an embedded property are invisible to a type-filtered frame unless they carry
-  their type themselves - deriving nested types from the property's schema is the other
-  upstream gap.
+  (``works_for``) would absorb the organization; ``reference_preserving_frame`` derives
+  ``"@embed": "@never"`` from ``format: iri-reference`` and is the import default now;
+* a node nested under an embedded property is invisible to a type-filtered frame without an
+  ``rdf:type``; export now derives it from the property schema's
+  ``x-oold-instance-rdf-type`` (root types were always materialized), and where the property
+  schema declares none, an untyped nested node stays invisible - authored types win either
+  way.
 """
 
 from __future__ import annotations
@@ -72,21 +73,6 @@ ORG_NESTED_SCHEMA = {
     },
 }
 
-def person_frame() -> dict:
-    """The Person frame with references kept as references.
-
-    Without ``@embed: @never`` on ``works_for``, framing pulls the organization's own node
-    into every person that references it.
-    """
-    from oold.validation.frame import schema_to_frame
-
-    from schema_playground.mappings import declared_context
-
-    frame = schema_to_frame(PERSON_SCHEMA, declared_context(PERSON_CHAIN))
-    frame["works_for"] = {"@embed": "@never"}
-    return frame
-
-
 JANE = {"id": "https://example.org/people/jane", "name": "Jane Doe", "works_for": "https://example.org/orgs/acme"}
 JOE = {"id": "https://example.org/people/joe", "name": "Joe Bloggs", "works_for": "https://example.org/orgs/acme"}
 ACME = {"id": "https://example.org/orgs/acme", "name": "ACME"}
@@ -123,25 +109,14 @@ def test_many_source_documents_merge_into_one_graph():
 
 def test_many_to_many_the_person_reading_returns_each_person():
     """Framing by the Person schema fans the graph out into one node per person."""
-    result = from_rdf(merged_graph(), PERSON_CHAIN, format=NQUADS, frame=person_frame())
+    result = from_rdf(merged_graph(), PERSON_CHAIN, format=NQUADS)
     persons = sorted(_nodes(result), key=lambda n: str(n.get("id", "")))
 
     assert len(persons) == 2, result
     assert [p["name"] for p in persons] == ["Jane Doe", "Joe Bloggs"]
-    # the relation survives as a reference, the org node does not get absorbed
-    for person in persons:
-        works_for = person["works_for"]
-        if isinstance(works_for, dict):
-            works_for = works_for.get("id")
-        assert works_for == "https://example.org/orgs/acme", person
-
-
-def test_without_embed_never_the_reference_absorbs_the_organization():
-    """The default frame embeds the referenced org into each person: the finding that makes
-    `@embed: @never` a requirement for reference-valued properties."""
-    result = from_rdf(merged_graph(), PERSON_CHAIN, format=NQUADS)
-    persons = _nodes(result)
-    assert any(isinstance(p.get("works_for"), dict) for p in persons), persons
+    # by default the relation survives as a reference: format iri-reference becomes
+    # @embed @never in the frame, so the org node is not absorbed into each person
+    assert all(p["works_for"] == "https://example.org/orgs/acme" for p in persons), persons
 
 
 def test_many_to_one_the_org_reading_nests_the_persons():
@@ -177,12 +152,27 @@ def test_one_to_many_a_nested_org_document_unrolls_into_persons():
     # the @reverse in the context turns nesting into the persons' own worksFor triples
     assert sum("worksFor" in line for line in graph.splitlines()) == 2, graph
 
-    persons = sorted(
-        _nodes(from_rdf(graph, PERSON_CHAIN, format=NQUADS, frame=person_frame())),
-        key=lambda n: str(n.get("id", "")),
-    )
+    persons = sorted(_nodes(from_rdf(graph, PERSON_CHAIN, format=NQUADS)), key=lambda n: str(n.get("id", "")))
     assert [p.get("name") for p in persons] == ["Jane Doe", "Joe Bloggs"], persons
     assert all(p.get("works_for") == "https://example.org/orgs/acme" for p in persons), persons
+
+
+def test_nested_types_derive_from_the_property_schema():
+    """With `x-oold-instance-rdf-type` on the embedded property, authored types are optional."""
+    org_schema = json.loads(json.dumps(ORG_NESTED_SCHEMA))
+    org_schema["properties"]["employees"]["items"]["x-oold-instance-rdf-type"] = ["schema:Person"]
+    org_chain = chain(org_schema, None)
+
+    nested = {
+        "id": "https://example.org/orgs/acme",
+        "name": "ACME",
+        "employees": [{"id": "https://example.org/people/jane", "name": "Jane Doe"}],
+    }
+    graph = to_rdf(nested, org_chain, format=NQUADS)
+    assert "schema.org/Person" in graph.replace("<", "").replace(">", ""), graph
+
+    persons = [n for n in _nodes(from_rdf(graph, PERSON_CHAIN, format=NQUADS)) if n.get("name") == "Jane Doe"]
+    assert len(persons) == 1, persons
 
 
 def test_a_nested_node_without_a_type_is_invisible_to_the_person_frame():
