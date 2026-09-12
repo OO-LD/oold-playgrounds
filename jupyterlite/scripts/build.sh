@@ -2,8 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OOLD_SRC="${OOLD_SRC:-C:/Users/Stier/ownCloud/Git/OO-LD/oold-python}"
-PY="$ROOT/.venv/Scripts/python.exe"
+
+# Sibling checkout by default; the layout differs in CI, so allow an override.
+OOLD_SRC="${OOLD_SRC:-$(cd "$ROOT/../.." && pwd)/oold-python}"
+
+if [ -x "$ROOT/.venv/Scripts/python.exe" ]; then
+  PY="${PY:-$ROOT/.venv/Scripts/python.exe}"
+else
+  PY="${PY:-$ROOT/.venv/bin/python}"
+fi
 
 echo "== building oold wheel from $OOLD_SRC =="
 rm -f "$ROOT"/wheels/oold-*.whl
