@@ -1,0 +1,96 @@
+name: pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      oold_ref:
+        description: oold-python ref to build the wheel from
+        default: experiment/graph-object-binding-107
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  OOLD_REF: ${{ inputs.oold_ref || 'experiment/graph-object-binding-107' }}
+  # ty has no releases; pin the ruff commit so diagnostics do not move under us
+  RUFF_REF: 2c3fa3e32f31cbb594f289e3a3e1bdc40de33262
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: playgrounds
+
+      # The demos track an unreleased branch, so the wheel is built from source
+      # rather than pulled from PyPI.
+      - uses: actions/checkout@v4
+        with:
+          repository: OO-LD/oold-python
+          ref: ${{ env.OOLD_REF }}
+          path: oold-python
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Cache ty_wasm
+        id: tywasm
+        uses: actions/cache@v4
+        with:
+          path: playgrounds/ty-playground/ty_wasm
+          key: ty-wasm-${{ env.RUFF_REF }}
+
+      - name: Build ty_wasm
+        if: steps.tywasm.outputs.cache-hit != 'true'
+        run: |
+          git clone --filter=blob:none https://github.com/astral-sh/ruff ruff
+          git -C ruff checkout "$RUFF_REF"
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          wasm-pack build ruff/crates/ty_wasm --target web --out-dir "$GITHUB_WORKSPACE/playgrounds/ty-playground/ty_wasm"
+
+      - name: Install
+        working-directory: playgrounds
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --quiet zensical
+          npm --prefix ty-playground ci
+          npm --prefix jupyterlite ci
+          python -m venv jupyterlite/.venv
+          jupyterlite/.venv/bin/python -m pip install --quiet \
+            jupyterlite-core jupyterlite-pyodide-kernel build \
+            anywidget jupyterlab_widgets
+
+      - name: Build site
+        working-directory: playgrounds
+        env:
+          PY: ${{ github.workspace }}/playgrounds/.venv/bin/python
+          OOLD_SRC: ${{ github.workspace }}/oold-python
+        run: bash scripts/build-site.sh
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: playgrounds/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
