@@ -22,7 +22,7 @@ Then open <http://localhost:5006/app>.
 | Target schema | a second schema, in the same three views |
 | Transformed instance | the same data read through the target schema |
 
-Any column can be collapsed; the rest take the space. Validation runs twice: the JSON editors ([panelini MonacoEditor](https://github.com/opensemanticworld/panelini/tree/monaco-editor-panel)) validate inline while typing - instances against the resolved schema chain, schemas against the OO-LD meta-schema - and the full `oold validate` pipeline reports beneath the editor that produced the problem.
+Any column can be collapsed; the rest take the space. Validation runs twice: the JSON and YAML editors ([panelini MonacoEditor](https://github.com/opensemanticworld/panelini/pull/60)) validate inline while typing, with schema-driven completion - instances against the resolved schema chain, schemas against the OO-LD meta-schema plus the full 2020-12 vocabulary (shipped by `jsonschema`, resolved offline) - and the full `oold validate` pipeline reports beneath the editor that produced the problem. A `$schema` pointing at an external URL also works: known metas resolve from the offline store, anything else is fetched live (CORS permitting).
 
 ## Mapping sets
 
@@ -43,7 +43,7 @@ uv run python scripts/build_wasm.py
 python -m http.server --directory dist
 ```
 
-converts the app to a static [Pyodide](https://pyodide.org/) page under `dist/`, no Python server needed. Two Playwright checks keep the claims honest: `scripts/check_wasm.py` loads the built page in a real browser and reports what broke, and `scripts/check_editors.py` (against a served `scripts/_editors_probe_app.py`) asserts that the editors actually validate inline, complete from the schema, and highlight JSON, YAML and Turtle.
+converts the app to a static [Pyodide](https://pyodide.org/) page under `dist/`, no Python server needed. Playwright keeps the claims honest: `tests/test_editor_integration.py` serves the app itself and asserts that the editors validate inline (JSON and YAML, instances and schemas), complete from the schema while typing, fetch an external `$schema`, and highlight JSON, YAML and Turtle; `scripts/check_wasm.py` loads the built browser page and reports what broke.
 
 ## Pending upstream migration
 

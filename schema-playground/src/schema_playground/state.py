@@ -89,9 +89,7 @@ def editor_schema(chain: list[dict[str, Any]]) -> dict[str, Any] | None:
 def meta_schema() -> dict[str, Any] | None:
     """The newest OO-LD meta-schema oold ships, for inline validation of schema documents.
 
-    The base file is used because the entry file is only a reference to it. Its two remote
-    references (the 2020-12 meta-schema and the UI keywords) are skipped by the editor,
-    which never fetches; the locally defined ``x-oold-*`` keywords still validate.
+    The base file is used because the entry file is only a reference to it.
     """
     try:
         from importlib import resources
@@ -102,6 +100,43 @@ def meta_schema() -> dict[str, Any] | None:
     except Exception as exc:
         logger.warning("no meta-schema for editor validation: %s", exc)
         return None
+
+
+def meta_store() -> dict[str, Any]:
+    """Everything a schema editor's references resolve against, offline.
+
+    The meta-schema base defines only the ``x-oold-*`` keywords itself; the core vocabulary
+    (``type``, ``properties``, ...) comes from its ``$ref`` to json-schema.org. Without those
+    resolvable, a core-keyword mistake is exactly the kind of error that goes silently
+    unflagged. jsonschema ships the 2020-12 meta-schemas, so they are registered under their
+    real URIs; the OO-LD meta and UI meta likewise, under every version path a document may
+    name.
+    """
+    store: dict[str, Any] = {}
+    try:
+        from jsonschema_specifications import REGISTRY
+
+        for uri in REGISTRY:
+            if "2020-12" in uri:
+                store[uri] = REGISTRY.contents(uri)
+    except Exception as exc:
+        logger.warning("no 2020-12 meta-schemas for editor validation: %s", exc)
+
+    try:
+        from importlib import resources
+
+        root = resources.files("oold.validation") / "meta"
+        versions = sorted(entry.name for entry in root.iterdir() if entry.is_dir())
+        latest = versions[-1]
+        base = json.loads((root / latest / "oold-meta-schema-base.json").read_text(encoding="utf-8"))
+        ui = json.loads((root / latest / "oold-ui-meta-schema.json").read_text(encoding="utf-8"))
+        for version in ("latest", "dev", latest):
+            store[f"https://oo-ld.org/{version}/meta/oold-meta-schema.json"] = base
+            store[f"https://oo-ld.org/{version}/meta/oold-meta-schema-base.json"] = base
+            store[f"https://oo-ld.org/{version}/meta/oold-ui-meta-schema.json"] = ui
+    except Exception as exc:
+        logger.warning("no OO-LD meta-schemas for editor validation: %s", exc)
+    return store
 
 
 def schema_filename(schema: Any) -> str:

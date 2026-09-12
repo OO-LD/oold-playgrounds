@@ -25,8 +25,14 @@ from schema_playground.transform import JSON_LD
 
 EDITOR_HEIGHT = 420
 
-#: Merged last into every editor: monaco's default type runs large for four columns.
-EDITOR_OPTIONS = {"fontSize": 12}
+#: Merged last into every editor. The font: monaco's default runs large for four columns.
+#: The quick suggestions: monaco disables them inside strings by default, and in a JSON
+#: document everything is a string, so schema completion would otherwise only ever appear on
+#: an explicit trigger.
+EDITOR_OPTIONS = {
+    "fontSize": 12,
+    "quickSuggestions": {"other": True, "comments": False, "strings": True},
+}
 
 
 def _to_yaml(document: Any) -> str:
@@ -53,6 +59,7 @@ class DocumentEditor(pn.viewable.Viewer):
         height: int = EDITOR_HEIGHT,
         schema_field: str | None = None,
         json_schema: dict | None = None,
+        extra_store: dict | None = None,
     ) -> None:
         super().__init__()
         self._state = state
@@ -62,9 +69,11 @@ class DocumentEditor(pn.viewable.Viewer):
 
         if schema_field is not None and json_schema is None:
             json_schema = getattr(state, schema_field)
-        self._json_schema = json_schema if language == "json" else None
-        # schema_request="ignore": OO-LD documents declare their $schema, which the editor
-        # never fetches and would otherwise flag on every buffer.
+        self._json_schema = json_schema
+        self._extra_store = extra_store or {}
+        # schema_request="ignore": a $schema pointer that resolves neither from the store nor
+        # over the network should not put a marker on every buffer. enable_schema_request
+        # lets truly external pointers and refs fetch live (CORS permitting).
         self._editor = MonacoEditor(
             value=self._current_text(),
             language=language,
@@ -72,6 +81,7 @@ class DocumentEditor(pn.viewable.Viewer):
             json_schema=self._json_schema,
             schema_store=self._schema_store(),
             schema_request="ignore",
+            enable_schema_request=True,
             options=EDITOR_OPTIONS,
             sizing_mode="stretch_width",
             height=height,
@@ -79,7 +89,7 @@ class DocumentEditor(pn.viewable.Viewer):
         if not readonly:
             self._editor.param.watch(self._on_edit, "value")
         state.param.watch(self._on_state, field)
-        if schema_field is not None and language == "json":
+        if schema_field is not None:
             state.param.watch(self._on_schema, schema_field)
 
     def _declared_pointer(self) -> str | None:
@@ -89,16 +99,17 @@ class DocumentEditor(pn.viewable.Viewer):
         return pointer if isinstance(pointer, str) and pointer.strip() else None
 
     def _schema_store(self) -> dict | None:
-        """The schema registered under the buffer's own `$schema` pointer.
+        """The schemas this buffer's references resolve against.
 
-        A buffer that declares `$schema` bypasses the fileMatch association entirely (the
-        in-document pointer wins in Monaco's JSON service), so the same schema is registered
-        under that URI too. Both are set, because the pointer can be edited away.
+        The buffer's own `$schema` pointer bypasses the fileMatch association entirely (it
+        wins in Monaco's JSON service), so the validation schema is registered under that URI
+        too. `extra_store` carries fixed entries such as the 2020-12 and OO-LD meta-schemas.
         """
+        store = dict(self._extra_store)
         pointer = self._declared_pointer()
-        if pointer and self._json_schema:
-            return {pointer: self._json_schema}
-        return None
+        if pointer and self._json_schema and pointer not in store:
+            store[pointer] = self._json_schema
+        return store or None
 
     def _sync_schema(self) -> None:
         self._editor.json_schema = self._json_schema
@@ -186,6 +197,7 @@ def schema_column(
     error_field: str,
     chain_of: Callable[[], list],
     meta: dict | None = None,
+    store: dict | None = None,
 ) -> pn.Column:
     """A schema column: the document in two encodings, plus its reading as terms.
 
@@ -197,8 +209,8 @@ def schema_column(
     )
     return pn.Column(
         _tabs(
-            ("JSON", DocumentEditor(state, field, "json", json_schema=meta)),
-            ("YAML", DocumentEditor(state, field, "yaml")),
+            ("JSON", DocumentEditor(state, field, "json", json_schema=meta, extra_store=store)),
+            ("YAML", DocumentEditor(state, field, "yaml", json_schema=meta, extra_store=store)),
             ("Terms", pn.Column(terms, scroll=True, height=EDITOR_HEIGHT)),
         ),
         error_pane(state, error_field),
@@ -265,7 +277,7 @@ def instance_column(
 
     panels = [
         ("JSON", DocumentEditor(state, instance_field, "json", readonly=readonly, schema_field=schema_field)),
-        ("YAML", DocumentEditor(state, instance_field, "yaml", readonly=readonly)),
+        ("YAML", DocumentEditor(state, instance_field, "yaml", readonly=readonly, schema_field=schema_field)),
         ("RDF", rdf_tab),
         ("Graph", graph_pane(state, graph_field)),
     ]

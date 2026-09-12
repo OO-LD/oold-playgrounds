@@ -25,7 +25,7 @@ from schema_playground.columns import (
     schema_column,
 )
 from schema_playground.split import Pane, SplitColumns
-from schema_playground.state import PlaygroundState, meta_schema
+from schema_playground.state import PlaygroundState, meta_schema, meta_store
 from schema_playground.mappings import chain, set_name
 from schema_playground.transform import JSON_LD, TURTLE
 
@@ -273,12 +273,18 @@ def build(state: PlaygroundState | None = None) -> Any:
     state = state or PlaygroundState()
     bind_url(state)
     meta = meta_schema()
+    store = meta_store()
 
     panes = [
         Pane(
             "Source schema",
             schema_column(
-                state, "source_schema", "source_schema_error", lambda: _chain_of(state, "source_schema"), meta=meta
+                state,
+                "source_schema",
+                "source_schema_error",
+                lambda: _chain_of(state, "source_schema"),
+                meta=meta,
+                store=store,
             ),
         ),
         Pane(
@@ -296,7 +302,12 @@ def build(state: PlaygroundState | None = None) -> Any:
         Pane(
             "Target schema",
             schema_column(
-                state, "target_schema", "target_schema_error", lambda: _chain_of(state, "target_schema"), meta=meta
+                state,
+                "target_schema",
+                "target_schema_error",
+                lambda: _chain_of(state, "target_schema"),
+                meta=meta,
+                store=store,
             ),
         ),
         Pane(
