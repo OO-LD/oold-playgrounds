@@ -67,20 +67,47 @@ oold_overlay.drain()
   return JSON.parse(payload) as OverlayDrain;
 }
 
-function renderValue(value: unknown): string {
+const INLINE_KEY_LIMIT = 4;
+const INLINE_DEPTH_LIMIT = 2;
+const INLINE_TEXT_LIMIT = 220;
+
+/**
+ * A remote payload can be far larger than a locally seeded one: a single
+ * Wikidata entity carries every property in every language. The inline text is
+ * capped so the decoration stays readable; the hover keeps the full JSON.
+ */
+function renderValue(value: unknown, depth = 0): string {
   if (value == null) {
     return "null";
   }
   if (typeof value !== "object") {
-    return typeof value === "string" ? `"${value}"` : String(value);
+    const text = typeof value === "string" ? `"${value}"` : String(value);
+    return text.length > 60 ? `${text.slice(0, 57)}..."` : text;
+  }
+  if (depth >= INLINE_DEPTH_LIMIT) {
+    return Array.isArray(value) ? `[${value.length} items]` : "{...}";
   }
   const entries = Object.entries(value as Record<string, unknown>).filter(
     ([key]) => key !== "id" && key !== "@id",
   );
-  const rendered = entries
-    .map(([key, item]) => `${key}: ${renderValue(item)}`)
+  const shown = entries.slice(0, INLINE_KEY_LIMIT);
+  const rendered = shown
+    .map(([key, item]) => `${shortKey(key)}: ${renderValue(item, depth + 1)}`)
     .join(", ");
-  return `{${rendered}}`;
+  const omitted = entries.length - shown.length;
+  return `{${rendered}${omitted > 0 ? `, +${omitted} more` : ""}}`;
+}
+
+/** IRI-shaped keys are shown by their local name so the line stays scannable. */
+function shortKey(key: string): string {
+  const match = /[^/#]+$/.exec(key);
+  return match ? match[0] : key;
+}
+
+function truncate(text: string): string {
+  return text.length > INLINE_TEXT_LIMIT
+    ? `${text.slice(0, INLINE_TEXT_LIMIT - 3)}...`
+    : text;
 }
 
 export function formatEvent(event: LinkResolutionEvent): string {
@@ -90,9 +117,11 @@ export function formatEvent(event: LinkResolutionEvent): string {
     return `${field} -> cached ${event.iris.length} IRI${event.iris.length === 1 ? "" : "s"}, 0 backend calls`;
   }
 
-  const fetched = event.fetchedIris
-    .map((iri) => `${iri} ${renderValue(event.values[iri])}`)
-    .join(", ");
+  const fetched = truncate(
+    event.fetchedIris
+      .map((iri) => `${iri} ${renderValue(event.values[iri])}`)
+      .join(", "),
+  );
 
   const summary = `${event.backendCalls} backend call${event.backendCalls === 1 ? "" : "s"}, ${event.iris.length} IRI${event.iris.length === 1 ? "" : "s"}, ${event.cached} cached`;
   const via = event.resolvers.length > 0 ? ` via ${event.resolvers.join(", ")}` : "";

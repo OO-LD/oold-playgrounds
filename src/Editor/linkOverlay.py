@@ -33,6 +33,21 @@ def _user_location():
     return None, None
 
 
+def _linked_field():
+    """Field name for the LinkedBaseModel path.
+
+    ``_resolve`` is reached from ``__getattribute__``, whose ``name`` local is
+    the field being dereferenced. Reading it costs a frame walk per backend
+    call, not per attribute access.
+    """
+    frame = inspect.currentframe()
+    while frame is not None:
+        if frame.f_code.co_name == "__getattribute__":
+            return frame.f_locals.get("name")
+        frame = frame.f_back
+    return None
+
+
 def _jsonable(value):
     try:
         json.dumps(value)
@@ -121,10 +136,52 @@ def install():
         finally:
             _field_stack.pop()
 
+    from oold.model import LinkedBaseModel
+
+    original_linked = LinkedBaseModel.__dict__["_resolve"]
+    linked_fn = getattr(original_linked, "__func__", original_linked)
+
+    def _linked_resolve(iris):
+        for resolver in list(interface._resolvers.values()):
+            _wrap_resolver(type(resolver))
+
+        before = len(_calls)
+        started = time.perf_counter()
+        result = linked_fn(iris)
+        elapsed = round((time.perf_counter() - started) * 1000, 3)
+        calls = _calls[before:]
+
+        values = {}
+        for call in calls:
+            for iri, payload in call["values"].items():
+                values[iri] = payload
+
+        filename, lineno = _user_location()
+        _events.append(
+            {
+                "field": _linked_field(),
+                "file": filename,
+                "line": lineno,
+                "target": "LinkedBaseModel",
+                "iris": list(iris),
+                "fetchedIris": list(iris),
+                "cached": 0,
+                "backendCalls": len(calls),
+                "resolvers": sorted({call["resolver"] for call in calls}),
+                "values": values,
+                "ms": elapsed,
+            }
+        )
+        return result
+
     _originals["batch"] = original_batch
     _originals["get"] = original_get
+    _originals["linked"] = original_linked
     _descriptor._batch_resolve = _batch_resolve
     _descriptor._AutoLink.__get__ = __get__
+    LinkedBaseModel._resolve = staticmethod(_linked_resolve)
+    for resolver in list(interface._resolvers.values()):
+        _wrap_resolver(type(resolver))
     _state["installed"] = True
     return "installed"
 
@@ -133,10 +190,11 @@ def uninstall():
     if not _state["installed"]:
         return "not installed"
 
-    from oold.model import _descriptor
+    from oold.model import LinkedBaseModel, _descriptor
 
     _descriptor._batch_resolve = _originals["batch"]
     _descriptor._AutoLink.__get__ = _originals["get"]
+    LinkedBaseModel._resolve = _originals["linked"]
     for cls, original in _resolver_originals.items():
         cls.resolve_iris = original
     _resolver_originals.clear()
