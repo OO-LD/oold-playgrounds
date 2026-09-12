@@ -138,7 +138,10 @@ def install():
 
     from oold.model import LinkedBaseModel
 
-    original_linked = LinkedBaseModel.__dict__["_resolve"]
+    # Only the pre descriptor binding defines its own _resolve. Once the
+    # descriptor binding became the default, resolution runs through
+    # _batch_resolve instead and this hook has nothing to wrap.
+    original_linked = LinkedBaseModel.__dict__.get("_resolve")
     linked_fn = getattr(original_linked, "__func__", original_linked)
 
     def _linked_resolve(iris):
@@ -179,7 +182,8 @@ def install():
     _originals["linked"] = original_linked
     _descriptor._batch_resolve = _batch_resolve
     _descriptor._AutoLink.__get__ = __get__
-    LinkedBaseModel._resolve = staticmethod(_linked_resolve)
+    if original_linked is not None:
+        LinkedBaseModel._resolve = staticmethod(_linked_resolve)
     for resolver in list(interface._resolvers.values()):
         _wrap_resolver(type(resolver))
     _state["installed"] = True
@@ -194,7 +198,8 @@ def uninstall():
 
     _descriptor._batch_resolve = _originals["batch"]
     _descriptor._AutoLink.__get__ = _originals["get"]
-    LinkedBaseModel._resolve = _originals["linked"]
+    if _originals.get("linked") is not None:
+        LinkedBaseModel._resolve = _originals["linked"]
     for cls, original in _resolver_originals.items():
         cls.resolve_iris = original
     _resolver_originals.clear()
