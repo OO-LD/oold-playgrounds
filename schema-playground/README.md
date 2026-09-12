@@ -34,6 +34,10 @@ The right-hand side is not a second editor; it is the same data read through ano
 
 The centre **Paste RDF** panel (Turtle or JSON-LD) replaces the source columns as the input for the right-hand side, which keeps the data flow one-directional and free of update loops.
 
+## Several entities in one document
+
+JSON has no document-stream notation (JSON Lines exists, but a stream is not a JSON document, so every JSON tool rejects it); the JSON-LD container for several entities is a single document with a `@graph` array, whose nodes reference each other by `id`. The playground supports it end to end: each node is validated against the schema on its own (errors name the node, `@graph[1] ...`), the whole graph exports and transforms, and re-nesting on import happens by framing. In YAML you may write a document stream (`---` separators); the playground reads it as a `@graph`.
+
 Every editable field accepts either a document or a URL to fetch it from, e.g. `https://oo-ld.org/latest/schemas/Person.schema.json`. The session travels compressed in the URL, so a link reproduces what you are looking at.
 
 ## In the browser

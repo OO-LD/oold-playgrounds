@@ -197,12 +197,39 @@ def validate(document: Any, kind: str, schema: Any = None, chain: list | None = 
                 schema_path = base / schema_filename(schema)
                 if not schema_path.exists():
                     schema_path.write_text(json.dumps(schema or {}), encoding="utf-8")
+
+                def _prepare(node: dict) -> dict:
+                    payload = dict(node)
+                    payload["$schema"] = schema_path.name
+                    payload["@context"] = (
+                        _local_ref(payload["@context"], schema_path.name)
+                        if "@context" in payload
+                        else schema_path.name
+                    )
+                    return payload
+
+                graph = document.get("@graph")
+                if isinstance(graph, list):
+                    # A graph document is a container: each node is an instance of the
+                    # schema, so each is validated on its own.
+                    failures = []
+                    for index, node in enumerate(graph):
+                        if not isinstance(node, dict):
+                            failures.append(f"@graph[{index}]: not an object")
+                            continue
+                        target = base / f"Node{index}.instance.json"
+                        target.write_text(json.dumps(_prepare(node)), encoding="utf-8")
+                        node_report = validate_instance(target, schema_path, options)
+                        if node_report.fatal_error:
+                            failures.append(f"@graph[{index}]: {node_report.fatal_error}")
+                        failures.extend(
+                            f"@graph[{index}] {c.id}: {c.message or c.status}"
+                            for c in node_report.checks
+                            if c.failed
+                        )
+                    return "\n".join(failures)
                 target = base / "Document.instance.json"
-                payload = dict(document)
-                payload["$schema"] = schema_path.name
-                if "@context" in payload:
-                    payload["@context"] = _local_ref(payload["@context"], schema_path.name)
-                target.write_text(json.dumps(payload), encoding="utf-8")
+                target.write_text(json.dumps(_prepare(document)), encoding="utf-8")
                 report = validate_instance(target, schema_path, options)
     except Exception as exc:
         return f"validator error: {exc}"
@@ -244,9 +271,13 @@ class PlaygroundState(param.Parameterized):
     target_schema_error = param.String(default="")
     bus_error = param.String(default="")
 
-    def __init__(self, **params: Any) -> None:
+    def __init__(self, compute: bool = True, **params: Any) -> None:
         super().__init__(**params)
-        self.recompute()
+        # A server session can defer the first pass to after the page is delivered: the
+        # validators and the RDF pipeline cost seconds, and running them before the document
+        # exists means seconds of blank page instead of a loading indicator.
+        if compute:
+            self.recompute()
 
     def _load(self, value: str) -> tuple[Any, str]:
         """A field's document and the first problem with it, if any."""

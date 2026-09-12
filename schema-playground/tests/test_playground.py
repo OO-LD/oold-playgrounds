@@ -258,3 +258,73 @@ def test_the_playground_does_not_pull_in_the_heavy_dependencies():
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "", f"playground imported: {result.stdout.strip()}"
+
+
+# -- several entities in one document ------------------------------------------
+
+
+def test_a_yaml_document_stream_reads_as_a_graph():
+    """YAML's `---` stream has no JSON counterpart; the JSON-LD container is @graph."""
+    document, error = cfg.parse_document("name: A\n---\nname: B\n")
+    assert error is None
+    assert document == {"@graph": [{"name": "A"}, {"name": "B"}]}
+
+
+def test_a_graph_instance_exports_all_nodes_and_transforms():
+    state = PlaygroundState()
+    graph = {
+        "@context": "Person.schema.json",
+        "$schema": "Person.schema.json",
+        "@graph": [
+            {"id": "https://example.org/people/jane", "name": "Jane Doe", "works_for": "https://example.org/orgs/acme"},
+            {"id": "https://example.org/people/joe", "name": "Joe Bloggs", "works_for": "https://example.org/orgs/acme"},
+        ],
+    }
+    state.source_instance = json.dumps(graph, indent=2)
+
+    assert "Jane Doe" in state.source_rdf and "Joe Bloggs" in state.source_rdf
+    assert state.source_instance_error == "", state.source_instance_error
+
+    transformed = json.loads(state.target_instance)
+    names = json.dumps(transformed)
+    assert "Jane Doe" in names and "Joe Bloggs" in names, transformed
+
+
+def test_a_graph_node_error_is_reported_with_its_index():
+    state = PlaygroundState()
+    graph = {
+        "@context": "Person.schema.json",
+        "$schema": "Person.schema.json",
+        "@graph": [
+            {"id": "https://example.org/people/jane", "name": "Jane Doe"},
+            {"id": "https://example.org/people/joe", "name": 123},
+        ],
+    }
+    state.source_instance = json.dumps(graph, indent=2)
+
+    assert "@graph[1]" in state.source_instance_error, state.source_instance_error
+    assert "@graph[0]" not in state.source_instance_error
+
+
+# -- the loading overlay ---------------------------------------------------------
+
+
+def test_the_loading_overlay_follows_editor_readiness():
+    """main.loading turns on while editors boot and off once every visible one is ready."""
+    from panelini.panels.monacoeditor import MonacoEditor
+
+    from schema_playground import build
+    from schema_playground.app import _spin_until_ready
+
+    app = build(PlaygroundState())
+    main = app.main[0]
+    # outside a session build() clears the overlay right away (nothing would ever be ready)
+    assert main.loading is False
+
+    hidden = pn.Column()
+    _spin_until_ready(main, hidden, in_session=True)
+    assert main.loading is True
+
+    for editor in main.select(MonacoEditor):
+        editor.ready = True
+    assert main.loading is False

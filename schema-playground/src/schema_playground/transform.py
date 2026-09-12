@@ -149,6 +149,38 @@ def _id_keys(context: Any) -> frozenset[str]:
     return frozenset(keys)
 
 
+def _materialize_types(document: dict[str, Any], schemas: list[dict[str, Any]]) -> None:
+    """Give untyped nodes the schema's declared ``rdf:type``.
+
+    The same rule the validator's roundtrip applies: ``x-oold-instance-rdf-type`` is
+    materialised as ``@type`` unless the node already carries one. Without it a node is
+    invisible to any type-filtering frame, so a multi-node ``@graph`` import would come back
+    empty rather than re-nested.
+    """
+    try:
+        from oold.validation.frame import instance_rdf_types
+    except ImportError:
+        return
+    types = instance_rdf_types(schemas[-1]) if schemas else None
+    if not types:
+        return
+
+    def ensure(node: Any) -> None:
+        if isinstance(node, dict) and "type" not in node and "@type" not in node:
+            node["@type"] = list(types)
+
+    graph = document.get("@graph")
+    if isinstance(graph, list):
+        # The document is a shallow copy of the caller's instance: the nodes inside @graph
+        # are still shared, and writing @type into them would hand the validator - and the
+        # editor - a document the user never wrote.
+        document["@graph"] = [dict(node) if isinstance(node, dict) else node for node in graph]
+        for node in document["@graph"]:
+            ensure(node)
+    else:
+        ensure(document)
+
+
 def _is_graph_document(document: Any) -> bool:
     """Whether a JSON-LD document is a graph of nodes rather than a single node."""
     if isinstance(document, list):
@@ -173,6 +205,7 @@ def to_rdf(
 
     document = {k: v for k, v in instance.items() if k not in ("@context", "$schema")}
     document["@context"] = context
+    _materialize_types(document, schemas)
 
     nquads = jsonld.to_rdf(document, {**(options or {}), "format": NQUADS})
     if format == NQUADS:

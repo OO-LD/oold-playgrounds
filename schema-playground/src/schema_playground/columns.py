@@ -78,7 +78,7 @@ class DocumentEditor(pn.viewable.Viewer):
             value=self._current_text(),
             language=language,
             read_only=readonly,
-            json_schema=self._json_schema,
+            json_schema=self._shaped_schema(),
             schema_store=self._schema_store(),
             schema_request="ignore",
             enable_schema_request=True,
@@ -111,8 +111,24 @@ class DocumentEditor(pn.viewable.Viewer):
             store[pointer] = self._json_schema
         return store or None
 
+    def _shaped_schema(self) -> dict | None:
+        """The validation schema, wrapped when the buffer is a ``@graph`` of entities.
+
+        A graph document is a container of nodes; validating the container against a node
+        schema would flag every key. Each node validates against the chain instead.
+        """
+        if not self._json_schema:
+            return None
+        document = self._document()
+        if isinstance(document, dict) and isinstance(document.get("@graph"), list):
+            return {
+                "type": "object",
+                "properties": {"@graph": {"type": "array", "items": self._json_schema}},
+            }
+        return self._json_schema
+
     def _sync_schema(self) -> None:
-        self._editor.json_schema = self._json_schema
+        self._editor.json_schema = self._shaped_schema()
         self._editor.schema_store = self._schema_store()
 
     def _on_schema(self, event: Any) -> None:

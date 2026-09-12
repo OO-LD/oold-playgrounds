@@ -265,13 +265,68 @@ def bind_url(state: PlaygroundState) -> None:
     state.param.watch(persist, list(SESSION_FIELDS))
 
 
+def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session: bool | None = None) -> None:
+    """Overlay a loading spinner on the main area until the editors exist in the browser.
+
+    The page's own load event fires long before Monaco does (the editor bundle is large), so
+    readiness is counted from each visible editor's ``ready`` flag. Editors inside ``hidden``
+    (the collapsed paste panel) do not render until shown and are not waited for. A fallback
+    timeout clears the spinner regardless: a stuck overlay is worse than a page still
+    settling.
+    """
+    from panelini.panels.monacoeditor import MonacoEditor
+
+    if in_session is None:
+        in_session = pn.state.curdoc is not None
+    hidden_editors = {id(editor) for editor in hidden.select(MonacoEditor)}
+    editors = [
+        editor
+        for editor in main.select(MonacoEditor)
+        if id(editor) not in hidden_editors and not editor.ready
+    ]
+    if not editors:
+        return
+    main.loading = True
+    pending = {id(editor) for editor in editors}
+
+    def done(*_events: Any) -> None:
+        main.loading = False
+
+    def on_ready(event: Any) -> None:
+        pending.discard(id(event.obj))
+        if not pending:
+            done()
+
+    for editor in editors:
+        editor.param.watch(on_ready, "ready")
+
+    def arm_timeout() -> None:
+        # A safety net only: readiness normally clears the overlay. When no timeout can be
+        # armed the net is simply absent, not sprung.
+        try:
+            pn.state.curdoc.add_timeout_callback(done, 30_000)
+        except Exception:  # pragma: no cover - no document to arm on
+            pass
+
+    if in_session:
+        pn.state.onload(arm_timeout)
+    else:
+        done()
+
+
 def build(state: PlaygroundState | None = None) -> Any:
     """The assembled application, ready to serve."""
     pn.extension("codeeditor", "terminal", notifications=False)
 
     log_card, _handler = log_panel()
-    state = state or PlaygroundState()
+    deferred = state is None and pn.state.curdoc is not None
+    if state is None:
+        # The first recompute runs after the page is delivered (see _spin_until_ready), so
+        # the user sees the app shell and a spinner instead of seconds of blank page.
+        state = PlaygroundState(compute=not deferred)
     bind_url(state)
+    if deferred:
+        pn.state.onload(state.recompute)
     meta = meta_schema()
     store = meta_store()
 
@@ -337,6 +392,7 @@ def build(state: PlaygroundState | None = None) -> Any:
         log_card,
         sizing_mode="stretch_both",
     )
+    _spin_until_ready(main, paste_body)
 
     try:
         from panelini import Panelini

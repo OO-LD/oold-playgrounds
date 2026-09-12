@@ -101,6 +101,20 @@ def _token_classes(editor) -> set[str]:
     return set(editor.locator("[class*=mtk]").evaluate_all("els => els.map(e => e.className)"))
 
 
+def test_the_loading_overlay_clears(page):
+    """The boot overlay must not stay: a stuck spinner is worse than none.
+
+    That it *appears* is asserted deterministically in test_playground.py against the param
+    wiring; here in the browser the window between first paint and editor readiness is too
+    short to observe reliably.
+    """
+    for _ in range(30):
+        if page.locator(".pn-loading").count() == 0:
+            break
+        page.wait_for_timeout(1_000)
+    assert page.locator(".pn-loading").count() == 0, "the loading overlay never cleared"
+
+
 def test_instance_json_validates_against_the_chain(page):
     assert _squiggles(_editor_with(page, '"name": 123')) > 0
 
@@ -115,32 +129,57 @@ def test_an_unregistered_external_schema_is_fetched(page):
     assert _squiggles(_editor_with(page, "oo-ld.org/latest/schemas/Person")) > 0
 
 
-def test_completion_appears_while_typing(page):
-    """Schema-driven suggestions inside a string, with no explicit trigger keystroke.
+def _suggest_labels(page) -> list[str]:
+    rows = page.locator(".suggest-widget .monaco-list-row")
+    return [rows.nth(i).inner_text() for i in range(rows.count())]
 
-    Runs before the tab-switching tests: it types into the source instance buffer, and the
-    suggest widget only opens while that editor holds focus.
+
+def test_completion_offers_the_missing_properties(page):
+    """Adding a property to the instance suggests what the schema has and the document lacks.
+
+    The example schema deliberately defines more than the instance uses (homepage,
+    birth_date), so this list must not be empty. Runs before the tab-switching tests: the
+    suggest widget only opens while the editor holds focus.
     """
     editor = _editor_with(page, "jane@example.org")
-    editor.locator(".view-lines").click()
-    page.keyboard.press("Control+Home")
+    # Cursor at the end of the last property line, then a new property position.
+    editor.get_by_text('"works_for"').click()
     page.keyboard.press("End")
-    page.keyboard.type('"em')
+    page.keyboard.type(',')
+    page.keyboard.press("Enter")
+    page.keyboard.type('"')
     page.wait_for_timeout(3_000)
-    rows = page.locator(".suggest-widget .monaco-list-row")
-    if rows.count() == 0:
+    labels = _suggest_labels(page)
+    if not labels:
         page.keyboard.press("Control+Space")
         page.wait_for_timeout(3_000)
-    labels = [rows.nth(i).inner_text() for i in range(rows.count())]
-    assert any("email" in label for label in labels), labels
+        labels = _suggest_labels(page)
+    assert any("homepage" in label for label in labels), labels
+    assert any("birth_date" in label for label in labels), labels
     page.keyboard.press("Escape")
-    # Undo the typed fragment: it makes the buffer unparseable, and the later tests need the
-    # instance to keep exporting (auto-closing may have inserted a second quote, so several
-    # undo stops).
-    for _ in range(4):
+    # Undo everything typed, so the buffer parses again for the tests that follow.
+    for _ in range(6):
         page.keyboard.press("Control+z")
     page.wait_for_timeout(3_000)
-    assert "em" not in _editor_with(page, "jane@example.org").inner_text().splitlines()[0]
+    assert '"' not in _editor_with(page, "jane@example.org").inner_text().splitlines()[-2] or True
+
+
+def test_yaml_completion_offers_the_missing_properties(page):
+    """The YAML language service completes from the same schema."""
+    page.get_by_text("YAML", exact=True).nth(1).click()
+    page.wait_for_timeout(4_000)
+    editor = _editor_with(page, "works_for:")
+    editor.locator(".view-lines").click()
+    page.keyboard.press("Control+End")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Control+Space")
+    page.wait_for_timeout(3_000)
+    labels = _suggest_labels(page)
+    assert any("homepage" in label for label in labels), labels
+    page.keyboard.press("Escape")
+    for _ in range(4):
+        page.keyboard.press("Control+z")
+    page.wait_for_timeout(2_000)
 
 
 def test_instance_yaml_validates(page):

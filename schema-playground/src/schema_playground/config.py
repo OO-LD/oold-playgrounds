@@ -44,9 +44,20 @@ SOURCE_SCHEMA = json.dumps(
             "name": "schema:name",
             "email": "schema:email",
             "works_for": {"@id": "schema:worksFor", "@type": "@id"},
+            "homepage": {"@id": "schema:url", "@type": "@id"},
+            "birth_date": "schema:birthDate",
+            "Person": "schema:Person",
         },
         "x-oold-instance-rdf-type": ["schema:Person"],
         "x-oold-context": {
+            "Person": {
+                "foaf:Person": {
+                    "x-oold-sssom": {
+                        "predicate_id": "skos:exactMatch",
+                        "mapping_set_id": FOAF_SET,
+                    }
+                }
+            },
             "name": {
                 "foaf:name": {
                     "x-oold-sssom": {
@@ -72,12 +83,31 @@ SOURCE_SCHEMA = json.dumps(
                     },
                 }
             },
+            "homepage": {
+                "foaf:homepage": {
+                    "@type": "@id",
+                    "x-oold-sssom": {
+                        "predicate_id": "skos:exactMatch",
+                        "mapping_set_id": FOAF_SET,
+                    },
+                }
+            },
         },
         "properties": {
-            "id": {"type": "string", "format": "iri"},
-            "name": {"type": "string"},
-            "email": {"type": "string"},
-            "works_for": {"type": "string", "format": "iri-reference"},
+            "id": {"type": "string", "format": "iri", "description": "IRI identifying this person"},
+            "name": {"type": "string", "description": "Full name"},
+            "email": {"type": "string", "format": "email", "description": "Contact email address"},
+            "works_for": {
+                "type": "string",
+                "format": "iri-reference",
+                "description": "Organization the person works for",
+            },
+            "homepage": {
+                "type": "string",
+                "format": "uri",
+                "description": "Personal or professional homepage",
+            },
+            "birth_date": {"type": "string", "format": "date", "description": "Date of birth"},
         },
     },
     indent=2,
@@ -112,9 +142,14 @@ TARGET_SCHEMA = json.dumps(
             "full_name": "foaf:name",
             "mbox": "foaf:mbox",
             "employer": {"@id": "org:memberOf", "@type": "@id"},
+            "homepage": {"@id": "foaf:homepage", "@type": "@id"},
+            "Employee": "foaf:Person",
         },
         "x-oold-instance-rdf-type": ["foaf:Person"],
         "x-oold-context": {
+            "Employee": {
+                "schema:Person": {"x-oold-sssom": {"predicate_id": "skos:exactMatch"}}
+            },
             "full_name": {"schema:name": {"x-oold-sssom": {"predicate_id": "skos:exactMatch"}}},
             "mbox": {"schema:email": {"x-oold-sssom": {"predicate_id": "skos:exactMatch"}}},
             "employer": {
@@ -123,12 +158,27 @@ TARGET_SCHEMA = json.dumps(
                     "x-oold-sssom": {"predicate_id": "skos:exactMatch"},
                 }
             },
+            "homepage": {
+                "schema:url": {
+                    "@type": "@id",
+                    "x-oold-sssom": {"predicate_id": "skos:exactMatch"},
+                }
+            },
         },
         "properties": {
-            "id": {"type": "string", "format": "iri"},
-            "full_name": {"type": "string"},
-            "mbox": {"type": "string"},
-            "employer": {"type": "string", "format": "iri-reference"},
+            "id": {"type": "string", "format": "iri", "description": "IRI identifying this person"},
+            "full_name": {"type": "string", "description": "Full name, FOAF style"},
+            "mbox": {"type": "string", "format": "email", "description": "Mailbox address"},
+            "employer": {
+                "type": "string",
+                "format": "iri-reference",
+                "description": "Organization this person is a member of",
+            },
+            "homepage": {
+                "type": "string",
+                "format": "uri",
+                "description": "Personal or professional homepage",
+            },
         },
     },
     indent=2,
@@ -245,8 +295,13 @@ def parse_document(text: str) -> tuple[Any, str | None]:
         try:
             import yaml
 
-            return yaml.safe_load(stripped), None
+            documents = list(yaml.safe_load_all(stripped))
         except Exception:
             # Report the JSON failure: it names a line and column, where the YAML parser
             # tends to fail much later with a message about the JSON-shaped text.
             return None, f"not valid JSON or YAML: {json_error}"
+        if len(documents) == 1:
+            return documents[0], None
+        # A YAML document stream has no JSON counterpart; the JSON-LD container for several
+        # entities in one document is @graph, so that is what a stream means here.
+        return {"@graph": [doc for doc in documents if doc is not None]}, None
