@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Docs page embedding the oold repl</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; }
+      iframe { width: 100%; height: 640px; border: 1px solid #ccc; }
+    </style>
+  </head>
+  <body>
+    <h1>Host page: repl</h1>
+    <p>Served from port 8900, embedding JupyterLite from port 8899 (cross-origin).</p>
+    <iframe
+      id="lite-repl"
+      title="oold repl"
+      src="http://127.0.0.1:8899/repl/index.html?kernel=python&toolbar=1&code=print(%22inside%20an%20iframe%22)"
+    ></iframe>
+  </body>
+</html>
