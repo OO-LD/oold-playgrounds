@@ -1,7 +1,23 @@
 import { loadPyodide, type PyodideInterface } from "pyodide";
 
-export const PYODIDE_INDEX_URL = "/pyodide/";
-export const OOLD_WHEEL_URL = "/wheels/oold-0.16.5-py3-none-any.whl";
+/**
+ * Resolved against the document, not the origin, so the same bundle works at the
+ * domain root and under a project path such as /oold-playgrounds/ty/.
+ */
+const asset = (path: string) => new URL(path, document.baseURI).href;
+
+const PYODIDE_VERSION = "0.27.7";
+
+/**
+ * npm ships only part of the pyodide distribution. The dev server redirects the
+ * remainder to the CDN, but a static build has no middleware to do that, so the
+ * deployed site reads the whole distribution from the CDN instead.
+ */
+export const PYODIDE_INDEX_URL = import.meta.env.DEV
+  ? asset("pyodide/")
+  : `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
+export const OOLD_WHEEL_URL = asset("wheels/oold-0.16.5-py3-none-any.whl");
 
 export type ProgressFn = (message: string) => void;
 

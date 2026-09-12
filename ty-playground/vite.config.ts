@@ -43,6 +43,8 @@ function pyodideCdnFallback(): Plugin {
 }
 
 export default defineConfig({
+  // Relative, so the build runs at the domain root or under any project path.
+  base: "./",
   plugins: [react(), pyodideCdnFallback()],
   optimizeDeps: { exclude: ["pyodide", "ty_wasm"] },
   server: { port: 5173, strictPort: true },
