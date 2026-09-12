@@ -90,3 +90,60 @@ def test_a_served_session_boots_fast_and_clears_its_overlay():
     assert cleared, "the loading overlay never cleared"
     assert cleared[0] < 45, f"overlay cleared too late: {cleared[0]:.1f}s"
     assert len(ready) >= 10, f"only {len(ready)} editors reported ready"
+
+
+def test_the_overlay_clears_even_when_the_bundle_never_loads(tmp_path):
+    """With the editor bundle unreachable no editor ever reports ready; the timer must clear
+    the overlay anyway. Runs in a subprocess because the bundle URL is read at import time.
+    """
+    import subprocess
+    import sys
+    import os
+
+    script = tmp_path / "probe.py"
+    script.write_text(
+        """
+import socket, sys, time
+import panel as pn
+from playwright.sync_api import sync_playwright
+from schema_playground import build
+
+pn.extension()
+events = []
+start = time.monotonic()
+
+def instrumented():
+    app = build()
+    main = app.main[0]
+    main.param.watch(lambda e: events.append((time.monotonic() - start, e.new)), "loading")
+    return app
+
+with socket.socket() as s:
+    s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
+server = pn.serve(instrumented, port=port, websocket_origin=f"127.0.0.1:{port}", show=False, threaded=True)
+try:
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        pg = b.new_page()
+        pg.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
+        deadline = time.monotonic() + 50
+        while time.monotonic() < deadline:
+            if any(v is False for _, v in events):
+                break
+            time.sleep(0.5)
+        b.close()
+finally:
+    server.stop()
+cleared = [t for t, v in events if v is False]
+print("CLEARED", cleared[0] if cleared else "never")
+sys.exit(0 if cleared and cleared[0] < 40 else 1)
+""",
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["PANELINI_MONACO_BUNDLE"] = "http://127.0.0.1:9/never-there.mjs"
+    result = subprocess.run(  # noqa: S603 - the command is built here, not supplied
+        [sys.executable, str(script)], capture_output=True, text=True, env=env, timeout=180
+    )
+    assert "CLEARED" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -300,16 +300,26 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
     for editor in editors:
         editor.param.watch(on_ready, "ready")
 
-    def arm_timeout() -> None:
-        # A safety net only: readiness normally clears the overlay. When no timeout can be
-        # armed the net is simply absent, not sprung.
-        try:
-            pn.state.curdoc.add_timeout_callback(done, 30_000)
-        except Exception:  # pragma: no cover - no document to arm on
-            pass
-
     if in_session:
-        pn.state.onload(arm_timeout)
+        # The safety net: readiness normally clears the overlay, but when the editor module
+        # cannot load at all (a blocked or unreachable bundle CDN), no editor ever reports
+        # and only this timer stands between the user and a spinner that never leaves. A
+        # plain thread timer rather than a document timeout: those have failed silently
+        # before, and next_tick from a thread is the documented safe entry point.
+        import threading
+
+        doc = pn.state.curdoc
+
+        def force_done() -> None:
+            try:
+                doc.add_next_tick_callback(done)
+            except Exception:  # pragma: no cover - session already gone
+                pass
+
+        try:
+            threading.Timer(30.0, force_done).start()
+        except Exception:  # pragma: no cover - no threads (browser build)
+            pass
     else:
         done()
 

@@ -134,54 +134,6 @@ def _suggest_labels(page) -> list[str]:
     return [rows.nth(i).inner_text() for i in range(rows.count())]
 
 
-def test_completion_offers_the_missing_properties(page):
-    """Adding a property to the instance suggests what the schema has and the document lacks.
-
-    The example schema deliberately defines more than the instance uses (homepage,
-    birth_date), so this list must not be empty. Runs before the tab-switching tests: the
-    suggest widget only opens while the editor holds focus.
-    """
-    editor = _editor_with(page, "jane@example.org")
-    # Cursor at the end of the last property line, then a new property position.
-    editor.get_by_text('"works_for"').click()
-    page.keyboard.press("End")
-    page.keyboard.type(',')
-    page.keyboard.press("Enter")
-    page.keyboard.type('"')
-    page.wait_for_timeout(3_000)
-    labels = _suggest_labels(page)
-    if not labels:
-        page.keyboard.press("Control+Space")
-        page.wait_for_timeout(3_000)
-        labels = _suggest_labels(page)
-    assert any("homepage" in label for label in labels), labels
-    assert any("birth_date" in label for label in labels), labels
-    page.keyboard.press("Escape")
-    # Undo everything typed, so the buffer parses again for the tests that follow.
-    for _ in range(6):
-        page.keyboard.press("Control+z")
-    page.wait_for_timeout(3_000)
-    assert '"' not in _editor_with(page, "jane@example.org").inner_text().splitlines()[-2] or True
-
-
-def test_yaml_completion_offers_the_missing_properties(page):
-    """The YAML language service completes from the same schema."""
-    page.get_by_text("YAML", exact=True).nth(1).click()
-    page.wait_for_timeout(4_000)
-    editor = _editor_with(page, "works_for:")
-    editor.locator(".view-lines").click()
-    page.keyboard.press("Control+End")
-    page.keyboard.press("Enter")
-    page.keyboard.press("Control+Space")
-    page.wait_for_timeout(3_000)
-    labels = _suggest_labels(page)
-    assert any("homepage" in label for label in labels), labels
-    page.keyboard.press("Escape")
-    for _ in range(4):
-        page.keyboard.press("Control+z")
-    page.wait_for_timeout(2_000)
-
-
 def test_instance_yaml_validates(page):
     page.get_by_text("YAML", exact=True).nth(1).click()
     page.wait_for_timeout(4_000)
@@ -202,3 +154,63 @@ def test_turtle_is_highlighted(page):
     turtle = page.locator(".monaco-editor:visible").filter(has_text="@prefix")
     assert turtle.count() > 0
     assert len(_token_classes(turtle.nth(0))) > 1
+
+
+def test_yaml_completion_offers_the_missing_properties(page):
+    """The YAML language service completes from the same schema."""
+    page.get_by_text("YAML", exact=True).nth(1).click()
+    page.wait_for_timeout(4_000)
+    editor = _editor_with(page, "works_for:")
+    editor.locator(".view-lines").click()
+    page.keyboard.press("Control+End")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Control+Space")
+    page.wait_for_timeout(3_000)
+    labels = _suggest_labels(page)
+    assert any("homepage" in label for label in labels), labels
+    page.keyboard.press("Escape")
+
+
+def test_completion_offers_the_missing_properties(page):
+    """Adding a property to the instance suggests what the schema has and the document lacks.
+
+    The example schema deliberately defines more than the instance uses (homepage,
+    birth_date), so this list must not be empty. Runs last: it types into the source
+    instance buffer and deliberately leaves it that way - restoring by blind undo proved
+    flaky, and nothing runs after.
+    """
+    # the tab tests before this leave the instance column on another tab
+    page.get_by_text("JSON", exact=True).nth(1).click()
+    page.wait_for_timeout(2_000)
+    editor = _editor_with(page, "jane@example.org")
+    # Cursor at the end of the last property line, then a new property position.
+    editor.get_by_text('"works_for"').click()
+    page.keyboard.press("End")
+    page.keyboard.type(',')
+    page.keyboard.press("Enter")
+    page.keyboard.type('"')
+    page.wait_for_timeout(3_000)
+    labels = _suggest_labels(page)
+    if not labels:
+        page.keyboard.press("Control+Space")
+        page.wait_for_timeout(3_000)
+        labels = _suggest_labels(page)
+    assert any("homepage" in label for label in labels), labels
+    assert any("birth_date" in label for label in labels), labels
+    # readable, not merely present: inside a shadow root monaco's focus tracking breaks, and
+    # unfixed the focused row painted white text on the widget's near-white background
+    rows = page.locator(".suggest-widget .monaco-list-row")
+    contrast = rows.nth(0).evaluate(
+        """el => {
+            const px = s => s.match(/\d+/g).slice(0, 3).map(Number);
+            const fg = px(getComputedStyle(el.querySelector('.monaco-icon-label') || el).color);
+            let node = el, bg = [255, 255, 255];
+            while (node) {
+                const c = getComputedStyle(node).backgroundColor;
+                if (c && !c.includes('0, 0, 0, 0')) { bg = px(c); break; }
+                node = node.parentElement;
+            }
+            return Math.abs(fg[0]-bg[0]) + Math.abs(fg[1]-bg[1]) + Math.abs(fg[2]-bg[2]);
+        }"""
+    )
+    assert contrast > 150, f"suggest row text unreadable (contrast {contrast})"
