@@ -73,8 +73,10 @@ jobs:
           npm --prefix ty-playground ci
           npm --prefix jupyterlite ci
           python -m venv jupyterlite/.venv
+          # hatchling because build.sh builds the wheel with --no-isolation,
+          # so oold's backend has to be present in this environment already.
           jupyterlite/.venv/bin/python -m pip install --quiet \
-            jupyterlite-core jupyterlite-pyodide-kernel build \
+            jupyterlite-core jupyterlite-pyodide-kernel build hatchling \
             anywidget jupyterlab_widgets
 
       - name: Build site
