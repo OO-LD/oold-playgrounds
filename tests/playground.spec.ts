@@ -297,14 +297,14 @@ test("8. hover on an oold symbol returns non-empty markdown", async () => {
     const lines = text.split("\n");
 
     const targets = [
-      { symbol: "OoldModel", match: "class Person(OoldModel):" },
-      { symbol: "OoldField", match: "knows: list[\"Person\"] | None = OoldField()" },
-      { symbol: "Link", match: "employer: Link[Organization] | None = Field(default=None)" },
+      { symbol: "OoldModel", match: (line: string) => line === "class Person(OoldModel):" },
+      { symbol: "OoldField", match: (line: string) => line.startsWith("knows:") && line.includes("OoldField(") },
+      { symbol: "Link", match: (line: string) => line.startsWith("employer:") && line.includes("Link[") },
     ];
 
     const out: Record<string, { found: boolean; markdown: string | null }> = {};
     for (const target of targets) {
-      const index = lines.findIndex((line) => line.trim() === target.match);
+      const index = lines.findIndex((line) => target.match(line.trim()));
       if (index === -1) {
         out[target.symbol] = { found: false, markdown: null };
         continue;
