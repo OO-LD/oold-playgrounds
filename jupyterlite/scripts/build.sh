@@ -29,7 +29,7 @@ echo "== generating notebook =="
 
 echo "== jupyter lite build =="
 rm -rf "$ROOT/_output" "$ROOT/.jupyterlite.doit.db"
-(cd "$ROOT" && "$ROOT/.venv/Scripts/jupyter.exe" lite build \
+(cd "$ROOT" && "$PY" -m jupyter lite build \
   --debug \
   --contents "$ROOT/contents" \
   --piplite-wheels "$WHEEL" \
