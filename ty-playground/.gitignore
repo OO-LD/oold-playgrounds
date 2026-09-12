@@ -1,0 +1,9 @@
+node_modules/
+dist/
+test-results/
+test-results-full.txt
+_build/
+_ref/
+public/pyodide/
+public/wheels/
+ty_wasm/

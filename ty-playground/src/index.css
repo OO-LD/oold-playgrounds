@@ -1,0 +1,162 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #16181d;
+  color: #e6e6e6;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #2b2f38;
+}
+
+.app-header h1 {
+  font-size: 15px;
+  margin: 0;
+  font-weight: 600;
+}
+
+.meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: #9aa4b2;
+}
+
+.app-header button {
+  margin-left: auto;
+  background: #3d7dff;
+  color: white;
+  border: 0;
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-header button:disabled {
+  background: #333a46;
+  color: #7b8494;
+  cursor: not-allowed;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  color: #9aa4b2;
+  cursor: pointer;
+}
+
+.app-header button {
+  margin-left: 12px;
+}
+
+.oold-link-overlay {
+  color: #7ee0a8 !important;
+  font-style: italic;
+  opacity: 0.95;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #2b2f38;
+}
+
+.tab {
+  background: transparent;
+  border: 1px solid #2b2f38;
+  border-radius: 4px;
+  color: #9aa4b2;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab.active {
+  color: #e6e6e6;
+  border-color: #3d7dff;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor {
+  flex: 1 1 60%;
+  min-width: 0;
+}
+
+.placeholder {
+  padding: 16px;
+  color: #9aa4b2;
+}
+
+.side {
+  flex: 0 0 40%;
+  overflow: auto;
+  padding: 8px 12px;
+  border-left: 1px solid #2b2f38;
+  font-size: 12px;
+}
+
+.side h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9aa4b2;
+  margin: 14px 0 6px;
+}
+
+.side ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.side li {
+  padding: 3px 0;
+  border-bottom: 1px solid #21252d;
+  line-height: 1.4;
+}
+
+.side code {
+  color: #ff9a62;
+}
+
+.side pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #11131a;
+  padding: 8px;
+  border-radius: 4px;
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+}
