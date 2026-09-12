@@ -324,13 +324,18 @@ def test_the_loading_overlay_follows_editor_readiness():
     # outside a session build() clears the overlay right away (nothing would ever be ready)
     assert main.loading is False
 
-    hidden = pn.Column()
-    _spin_until_ready(main, hidden, in_session=True)
-    assert main.loading is True
+    # a fresh column, because build() above already wired its own watchers on its editors
+    editor = MonacoEditor(value="{}", height=100)
+    isolated = pn.Column(editor)
+    session_loaded = _spin_until_ready(isolated, pn.Column(), in_session=True)
+    assert isolated.loading is True
 
-    for editor in main.select(MonacoEditor):
-        editor.ready = True
-    assert main.loading is False
+    editor.ready = True
+    # readiness alone must NOT clear: a flip before the session's load event never reaches
+    # the browser, so the overlay waits for whichever gate closes last
+    assert isolated.loading is True
+    session_loaded()
+    assert isolated.loading is False
 
 # -- several documents per column -------------------------------------------------
 

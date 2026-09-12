@@ -385,9 +385,35 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
         return
     main.loading = True
     pending = {id(editor) for editor in editors}
+    doc = pn.state.curdoc
+    # Both must hold before the overlay may clear. The editors often report ready while the
+    # session is still initialising, and a property change made in that window never reaches
+    # the browser (verified: the server ends at css_classes=["main-object"] while the client
+    # keeps the loading classes forever) - whereas any change after the session's load event
+    # propagates reliably. So the flip waits for whichever comes last.
+    gates = {"loaded": not in_session, "finished": False}
+
+    def flip() -> None:
+        main.loading = False
+
+    def try_clear() -> None:
+        if not (gates["loaded"] and gates["finished"]):
+            return
+        if doc is not None:
+            try:
+                doc.add_next_tick_callback(flip)
+                return
+            except Exception:  # pragma: no cover - no running session
+                pass
+        flip()
 
     def done(*_events: Any) -> None:
-        main.loading = False
+        gates["finished"] = True
+        try_clear()
+
+    def session_loaded() -> None:
+        gates["loaded"] = True
+        try_clear()
 
     def on_ready(event: Any) -> None:
         pending.discard(id(event.obj))
@@ -398,6 +424,11 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
         editor.param.watch(on_ready, "ready")
 
     if in_session:
+        # Registered only with a real document: without one panel runs the callback
+        # immediately, which would open the gate before anything is served (and makes the
+        # gate untestable).
+        if doc is not None:
+            pn.state.onload(session_loaded)
         # The safety net: readiness normally clears the overlay, but when the editor module
         # cannot load at all (a blocked or unreachable bundle CDN), no editor ever reports
         # and only this timer stands between the user and a spinner that never leaves. A
@@ -405,20 +436,22 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
         # before, and next_tick from a thread is the documented safe entry point.
         import threading
 
-        doc = pn.state.curdoc
-
-        def force_done() -> None:
-            try:
-                doc.add_next_tick_callback(done)
-            except Exception:  # pragma: no cover - session already gone
-                pass
+        def give_up() -> None:
+            # A session whose editors never load may also never fire its load event (bokeh
+            # only reports idle once the modules settle), so the timer opens both gates: by
+            # now the initialisation race the loaded-gate protects against is long over.
+            gates["loaded"] = True
+            done()
 
         try:
-            threading.Timer(30.0, force_done).start()
+            timer = threading.Timer(30.0, give_up)
+            timer.daemon = True
+            timer.start()
         except Exception:  # pragma: no cover - no threads (browser build)
             pass
     else:
         done()
+    return session_loaded
 
 
 def build(state: PlaygroundState | None = None) -> Any:

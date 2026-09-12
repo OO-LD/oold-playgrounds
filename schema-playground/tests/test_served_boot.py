@@ -78,8 +78,12 @@ def test_a_served_session_boots_fast_and_clears_its_overlay():
                     break
                 time.sleep(0.5)
 
-            # one bounded browser-side sanity check: the app content is really there
+            # bounded browser-side checks: the app content is really there, and the overlay
+            # is gone from the DOM - the server-side param once flipped without the browser
+            # ever hearing about it, which no server-side assertion can catch
             assert page.get_by_text("Source schema").count() > 0
+            page.wait_for_timeout(3_000)
+            assert page.locator(".pn-loading").count() == 0, "overlay still in the DOM"
             browser.close()
     finally:
         server.stop()
