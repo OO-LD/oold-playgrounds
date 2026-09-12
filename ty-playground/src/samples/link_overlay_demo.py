@@ -7,10 +7,10 @@ not written on those lines.
 
 from oold.backend.document_store import SimpleDictDocumentStore
 from oold.backend.interface import SetResolverParam, set_resolver
-from oold.model._notation import LinkList, OoldField, OoldModel
+from oold.model import LinkedBaseModel, LinkList, OoldField
 
 
-class Person(OoldModel):
+class Person(LinkedBaseModel):
     id: str
     name: str | None = None
     type: str | None = "ex:Person"
