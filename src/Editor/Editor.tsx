@@ -302,6 +302,14 @@ class PlaygroundServer
 
     const digits = String(Math.max(completions.length - 1, 0)).length;
 
+    const word = model.getWordUntilPosition(position);
+    const range: IRange = {
+      startLineNumber: position.lineNumber,
+      endLineNumber: position.lineNumber,
+      startColumn: word.startColumn,
+      endColumn: position.column,
+    };
+
     return {
       incomplete: true,
       suggestions: completions.map((completion, index) => ({
@@ -323,7 +331,7 @@ class PlaygroundServer
         ),
         documentation: completion.documentation,
         detail: completion.detail,
-        range: undefined as unknown as IRange,
+        range,
       })),
     };
   }
