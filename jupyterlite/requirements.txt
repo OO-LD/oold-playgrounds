@@ -1,0 +1,19 @@
+# Build environment for the static JupyterLite site.
+#
+#   python -m venv .venv
+#   .venv/bin/python -m pip install -r requirements.txt
+#
+# jupyter-server is not a jupyterlite-core dependency but is required by the
+# contents addon, so --contents fails without it. hatchling is needed because
+# scripts/build.sh builds the oold wheel with --no-isolation.
+
+jupyterlite-core
+jupyterlite-pyodide-kernel
+jupyter-server
+
+build
+hatchling
+
+# shipped as labextensions so anywidget views render in the built site
+anywidget
+jupyterlab_widgets
