@@ -19,6 +19,11 @@ echo "== building ty playground =="
 # ship different builds of oold.
 (cd "$ROOT/ty-playground" && npm run wheel && npm run build)
 
+echo "== building schema playground =="
+# Panel app converted to a pyodide worker. Independent of the oold dev wheel:
+# it installs the released oold from PyPI in the browser.
+(cd "$ROOT/schema-playground" && uv sync --quiet && uv run python scripts/build_wasm.py)
+
 echo "== building jupyterlite =="
 # PY here points at the landing page venv; jupyterlite needs its own, which its
 # build script resolves when PY is absent.
@@ -28,9 +33,21 @@ echo "== building landing page =="
 (cd "$ROOT" && "$PY" -m zensical build)
 
 echo "== assembling $OUT =="
-rm -rf "$OUT/ty" "$OUT/jupyterlite"
+rm -rf "$OUT/ty" "$OUT/jupyterlite" "$OUT/schema"
 cp -r "$ROOT/ty-playground/dist" "$OUT/ty"
 cp -r "$ROOT/jupyterlite/_output" "$OUT/jupyterlite"
+cp -r "$ROOT/schema-playground/dist" "$OUT/schema"
+
+# panel convert names the page after the module. A redirect, not a copy: app.html
+# is tens of megabytes and duplicating it would double the deployed artifact.
+cat > "$OUT/schema/index.html" <<'HTML'
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Schema playground</title>
+<meta http-equiv="refresh" content="0; url=app.html">
+<link rel="canonical" href="app.html">
+<p><a href="app.html">Schema playground</a></p>
+HTML
 
 # The deployed build reads the pyodide distribution from the CDN, so the partial
 # copy vite lifts out of public/ is dead weight. Only the oold wheel is served.
