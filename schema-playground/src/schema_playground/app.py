@@ -19,6 +19,7 @@ import param
 
 from schema_playground import config as cfg
 from schema_playground.columns import (
+    CONTROLS_HEIGHT,
     EDITOR_HEIGHT,
     EDITOR_OPTIONS,
     error_pane,
@@ -292,6 +293,7 @@ def rdf_controls(state: PlaygroundState) -> pn.Row:
         mapping,
         sizing_mode="stretch_width",
         margin=0,
+        height=CONTROLS_HEIGHT,
     )
 
 
@@ -400,6 +402,24 @@ def example_switcher(state: PlaygroundState, busy: dict[str, Any] | None = None)
     return pn.Row(select, margin=(0, 12, 0, 8))
 
 
+def share_button() -> pn.widgets.Button:
+    """Copy the page URL, which always carries the whole session.
+
+    Client-side only: the clipboard is the browser's, and the URL to share is whatever the
+    address bar says right now - the persist watcher keeps it current.
+    """
+    button = pn.widgets.Button(name="Copy shareable URL", width=160)
+    button.js_on_click(
+        args={"btn": button},
+        code=(
+            "navigator.clipboard.writeText(window.location.href);"
+            "const before = btn.label; btn.label = 'Copied';"
+            "setTimeout(() => { btn.label = before; }, 1500);"
+        ),
+    )
+    return button
+
+
 def sync_collapse(state: PlaygroundState, split: SplitColumns) -> None:
     """Keep the split layout and the session's collapse list mirrored, both ways.
 
@@ -502,12 +522,14 @@ def bind_url(state: PlaygroundState) -> None:
         except Exception as exc:  # pragma: no cover - the URL is a convenience, not the state
             logger.warning("could not write the session to the URL: %s", exc)
 
-    # Only on an actual change. Writing during construction would set a reactive property
-    # while the document is still being built, which schedules a debounced server callback -
-    # and in a browser (Pyodide) build that pulls in bokeh's tornado-based server code, which
-    # is not installed there. Rewriting the URL on load is also pointless: it says what it
-    # already said.
+    # Never during construction: writing then would set a reactive property while the
+    # document is still being built, which schedules a debounced server callback - and in a
+    # browser (Pyodide) build that pulls in bokeh's tornado-based server code, which is not
+    # installed there. Once per session after load, though, so the address bar is a complete
+    # shareable link even before the first edit - the copy button copies whatever it says.
     state.param.watch(persist, list(SESSION_FIELDS))
+    if pn.state.curdoc is not None:
+        pn.state.onload(persist)
 
 
 def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session: bool | None = None) -> Any:
@@ -735,7 +757,12 @@ def build(state: PlaygroundState | None = None) -> Any:
     main = pn.Column(
         # two rows: the examples switch what is loaded, the paste toggle switches where the
         # input comes from - sharing a line read as one control group
-        example_switcher(state, busy),
+        pn.Row(
+            example_switcher(state, busy),
+            # aligned with the dropdown, which carries a label above itself
+            pn.Column(share_button(), margin=(19, 6, 0, 0)),
+            sizing_mode="stretch_width",
+        ),
         paste_toolbar,
         subtitle,
         workspace,

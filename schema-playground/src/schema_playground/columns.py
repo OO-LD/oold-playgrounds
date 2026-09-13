@@ -23,6 +23,8 @@ from schema_playground.terms import terms_table
 from schema_playground.transform import JSON_LD
 
 EDITOR_HEIGHT = 420
+#: Height of the format/mapping control row inside an RDF tab.
+CONTROLS_HEIGHT = 44
 
 #: Merged last into every editor. The font: monaco's default runs large for four columns.
 #: The quick suggestions: monaco disables them inside strings by default, and in a JSON
@@ -297,6 +299,9 @@ def instance_column(
     ``schema_field`` names the state field carrying the chain's merged schema; the JSON
     editor validates the instance against it inline, live with every schema edit.
     """
+    # With controls the RDF tab stacks two elements; the editor gives up their height so
+    # every tab panel is equally tall - the tabs render the tallest panel's height, and a
+    # taller RDF tab would push this column's status line below its neighbours'.
     rdf_view = MonacoEditor(
         value=getattr(state, rdf_field),
         language="turtle",
@@ -304,7 +309,7 @@ def instance_column(
         schema_request="ignore",
         options=EDITOR_OPTIONS,
         sizing_mode="stretch_width",
-        height=EDITOR_HEIGHT,
+        height=EDITOR_HEIGHT if controls is None else EDITOR_HEIGHT - CONTROLS_HEIGHT,
     )
     state.param.watch(lambda event: setattr(rdf_view, "value", event.new), rdf_field)
     state.param.watch(
