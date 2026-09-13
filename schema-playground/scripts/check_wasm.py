@@ -70,7 +70,8 @@ def main() -> int:
             page.wait_for_timeout(2000)
             state = page.evaluate(
                 "() => ({docs: Bokeh.documents.length,"
-                " handle: !!(window.__playground && window.__playground.editors().length)})"
+                " handle: !!(window.__playground && window.__playground.editors().length"
+                " && window.monaco)})"
             )
             single_document = state["docs"] == 1
             handle = bool(state["handle"])
