@@ -121,6 +121,10 @@ class SplitColumns(pn.viewable.Viewer):
     def _toggle(self, pane: Pane) -> None:
         pane.collapsed = not pane.collapsed
 
+    def collapsed_titles(self) -> list[str]:
+        """The currently collapsed panes, by title."""
+        return [pane.title for pane in self._panes if pane.collapsed]
+
     def collapse(self, *titles: str, collapsed: bool = True) -> None:
         """Collapse or expand panes by title, for callers that own the layout."""
         for pane in self._panes:

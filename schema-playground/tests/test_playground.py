@@ -475,3 +475,45 @@ def test_document_labels_use_id_and_shorten():
     assert document_label(cfg.SOURCE_SCHEMA, "x") == "Person.schema.json"
     assert document_label(_person_doc("https://example.org/people/jane", "J"), "x") == "jane"
     assert document_label("{broken", "fallback") == "fallback"
+
+
+# -- reference examples and layout state -----------------------------------------
+
+
+def test_examples_are_complete_sessions():
+    from schema_playground.app import apply_example
+
+    state = PlaygroundState()
+    apply_example(state, "Multi-doc")
+    assert len(state.source_instances) == 3
+    assert len(state.target_schemas) == 2
+    emitted = [json.loads(doc) for doc in state.target_instances]
+    assert sum("full_name" in d for d in emitted) == 2
+    assert sum("members" in d for d in emitted) == 1
+
+    apply_example(state, "Simple")
+    assert state.collapsed_panes == ["Target schemas"]
+    assert len(state.source_instances) == 1
+    assert len(state.target_instances) == 1
+
+    apply_example(state, "Transform")
+    assert state.collapsed_panes == []
+    assert json.loads(state.target_instance)["full_name"] == "Jane Doe"
+
+
+def test_collapse_state_mirrors_the_split_layout():
+    import panel as _pn
+
+    from schema_playground.app import ALL_PANES, sync_collapse
+    from schema_playground.split import Pane, SplitColumns
+
+    state = PlaygroundState(compute=False)
+    panes = [Pane(title, _pn.Column()) for title in ALL_PANES]
+    split = SplitColumns(panes)
+    sync_collapse(state, split)
+
+    state.collapsed_panes = ["Target schemas"]
+    assert split.collapsed_titles() == ["Target schemas"]
+
+    panes[0].collapsed = True
+    assert "Source schemas" in state.collapsed_panes

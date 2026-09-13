@@ -300,6 +300,8 @@ class PlaygroundState(param.Parameterized):
     paste_format = param.String(default=TURTLE)
     rdf_format = param.String(default=TURTLE)
     mapping_set = param.String(default="")
+    #: Pane titles currently collapsed; mirrored with the split layout by the app.
+    collapsed_panes = param.List(default=[], item_type=str)
 
     # -- derived. Never appear in the dependency list above, which is what keeps this acyclic.
     target_instances = param.List(default=[], item_type=str)

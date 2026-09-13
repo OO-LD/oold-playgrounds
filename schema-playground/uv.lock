@@ -1679,7 +1679,7 @@ wheels = [
 [[package]]
 name = "panelini"
 version = "0.11.0"
-source = { git = "https://github.com/opensemanticworld/panelini.git?rev=feat%2Fmonaco-schema-store-and-languages#5a4bccf85a052b477879e23e31fc2f4a6300297b" }
+source = { git = "https://github.com/opensemanticworld/panelini.git?rev=feat%2Fmonaco-schema-store-and-languages#6509388cda31837f54ecc20371e0a8a18dfc7422" }
 dependencies = [
     { name = "panel" },
     { name = "param" },

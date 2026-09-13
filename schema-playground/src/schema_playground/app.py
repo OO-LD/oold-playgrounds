@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 import panel as pn
+import param
 
 from schema_playground import config as cfg
 from schema_playground.columns import (
@@ -55,7 +56,7 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
     toggle = pn.widgets.Toggle(
         name="Paste RDF instead",
         value=state.use_paste,
-        button_type="primary",
+        button_type="primary" if state.use_paste else "default",
         width=200,
     )
     from panelini.panels.monacoeditor import MonacoEditor
@@ -100,6 +101,8 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
     def on_toggle(event: Any) -> None:
         state.use_paste = bool(event.new)
         body.visible = state.use_paste
+        toggle.button_type = "primary" if state.use_paste else "default"
+        toggle.name = "Pasted RDF is the input" if state.use_paste else "Paste RDF instead"
         # The source columns no longer feed anything, so they fold away to give the pasted
         # graph and its readings the width.
         split.collapse(*SOURCE_PANES, collapsed=state.use_paste)
@@ -266,6 +269,62 @@ class _PaneLogHandler(logging.Handler):
             )
 
 
+ALL_PANES = ("Source schemas", "Source instances", "Target schemas", "Transformed instances")
+
+
+def apply_example(state: PlaygroundState, name: str) -> None:
+    """Load a reference example: the same fields a shared URL of that config would seed."""
+    example = cfg.EXAMPLES[name]
+    with param.parameterized.batch_call_watchers(state):
+        state.source_schemas = list(example.source_schemas)
+        state.source_instances = list(example.source_instances)
+        state.target_schemas = list(example.target_schemas)
+        state.source_schema_idx = 0
+        state.source_instance_idx = 0
+        state.target_schema_idx = 0
+        state.target_instance_idx = 0
+        state.mapping_set = ""
+        state.use_paste = False
+        state.pasted_rdf = ""
+        state.collapsed_panes = list(example.collapsed_panes)
+    logger.info("loaded the %s example", name)
+
+
+def example_switcher(state: PlaygroundState) -> pn.Row:
+    buttons = pn.widgets.RadioButtonGroup(
+        options=list(cfg.EXAMPLES),
+        # the default session IS the Transform example; starting anywhere else would either
+        # mislabel the content or (with the first option preselected) make its button a no-op
+        value="Transform",
+        button_type="light",
+        button_style="outline",
+    )
+    buttons.param.watch(lambda event: event.new and apply_example(state, event.new), "value")
+    return pn.Row(
+        pn.pane.HTML("<small>Examples</small>", margin=(10, 2)),
+        buttons,
+        margin=(0, 12, 0, 2),
+    )
+
+
+def sync_collapse(state: PlaygroundState, split: SplitColumns) -> None:
+    """Keep the split layout and the session's collapse list mirrored, both ways."""
+
+    def from_state(*_events: Any) -> None:
+        wanted = set(state.collapsed_panes or [])
+        for title in ALL_PANES:
+            split.collapse(title, collapsed=title in wanted)
+
+    def from_split() -> None:
+        current = split.collapsed_titles()
+        if current != list(state.collapsed_panes or []):
+            state.collapsed_panes = current
+
+    state.param.watch(from_state, "collapsed_panes")
+    split._on_change = from_split
+    from_state()
+
+
 def log_panel() -> tuple[pn.Card, logging.Handler]:
     """Application log, collapsed by default, and the handler that feeds it.
 
@@ -330,6 +389,7 @@ SESSION_FIELDS = (
     "paste_format",
     "rdf_format",
     "mapping_set",
+    "collapsed_panes",
 )
 
 
@@ -538,13 +598,16 @@ def build(state: PlaygroundState | None = None) -> Any:
     ]
 
     split = SplitColumns(panes)
+    sync_collapse(state, split)
     toolbar, paste_body = paste_panel(state, split)
+    toolbar.insert(0, example_switcher(state))
 
     main = pn.Column(
         toolbar,
+        # the paste editor sits on the left, where the source columns it replaces collapse to
         pn.Row(
-            pn.Column(split, sizing_mode="stretch_both"),
             paste_body,
+            pn.Column(split, sizing_mode="stretch_both"),
             sizing_mode="stretch_both",
         ),
         log_card,

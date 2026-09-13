@@ -185,6 +185,108 @@ TARGET_SCHEMA = json.dumps(
 )
 
 
+SIMPLE_SCHEMA = json.dumps(
+    {
+        "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+        "$id": "Person.schema.json",
+        "title": "Person",
+        "type": "object",
+        "@context": {
+            "schema": "https://schema.org/",
+            "id": "@id",
+            "name": "schema:name",
+        },
+        "properties": {
+            "id": {"type": "string", "format": "iri", "description": "IRI identifying this person"},
+            "name": {"type": "string", "description": "Full name"},
+        },
+    },
+    indent=2,
+)
+
+SIMPLE_INSTANCE = json.dumps(
+    {
+        "@context": "Person.schema.json",
+        "$schema": "Person.schema.json",
+        "id": "https://example.org/people/jane",
+        "name": "Jane Doe",
+    },
+    indent=2,
+)
+
+ORG_SOURCE_SCHEMA = json.dumps(
+    {
+        "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+        "$id": "Organization.schema.json",
+        "title": "Organization",
+        "type": "object",
+        "@context": {
+            "schema": "https://schema.org/",
+            "id": "@id",
+            "type": "@type",
+            "name": "schema:name",
+        },
+        "x-oold-instance-rdf-type": ["schema:Organization"],
+        "properties": {
+            "id": {"type": "string", "format": "iri"},
+            "name": {"type": "string", "description": "Organization name"},
+        },
+    },
+    indent=2,
+)
+
+TEAM_TARGET_SCHEMA = json.dumps(
+    {
+        "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+        "$id": "Team.schema.json",
+        "title": "Team",
+        "type": "object",
+        "@context": {
+            "schema": "https://schema.org/",
+            "id": "@id",
+            "type": "@type",
+            "name": "schema:name",
+            "members": {"@reverse": "schema:worksFor", "@type": "@id"},
+        },
+        "x-oold-instance-rdf-type": ["schema:Organization"],
+        "properties": {
+            "id": {"type": "string", "format": "iri"},
+            "name": {"type": "string"},
+            "members": {
+                "type": "array",
+                "description": "Everyone working for this organization, nested",
+                "items": {"type": "object", "properties": {"name": {"type": "string"}}},
+            },
+        },
+    },
+    indent=2,
+)
+
+
+def _person_doc(identifier: str, name: str) -> str:
+    return json.dumps(
+        {
+            "@context": "Person.schema.json",
+            "$schema": "Person.schema.json",
+            "id": identifier,
+            "name": name,
+            "works_for": "https://example.org/orgs/acme",
+        },
+        indent=2,
+    )
+
+
+ORG_DOC = json.dumps(
+    {
+        "@context": "Organization.schema.json",
+        "$schema": "Organization.schema.json",
+        "id": "https://example.org/orgs/acme",
+        "name": "ACME",
+    },
+    indent=2,
+)
+
+
 class PlaygroundConfig(BaseModel):
     """The whole session, small enough to travel in a query parameter.
 
@@ -208,6 +310,35 @@ class PlaygroundConfig(BaseModel):
     rdf_format: str = TURTLE
     #: Empty means the consensus reading, which is what an instance means unmapped.
     mapping_set: str = ""
+    #: Pane titles currently collapsed, so a shared link reproduces the layout too.
+    collapsed_panes: list[str] = []
+
+
+#: The reference examples the toolbar switches between. Each is a complete session config;
+#: applying one is the same as loading its URL.
+EXAMPLES: dict[str, "PlaygroundConfig"] = {}
+
+
+def _define_examples() -> None:
+    EXAMPLES["Simple"] = PlaygroundConfig(
+        source_schemas=[SIMPLE_SCHEMA],
+        source_instances=[SIMPLE_INSTANCE],
+        target_schemas=[SIMPLE_SCHEMA],
+        collapsed_panes=["Target schemas"],
+    )
+    EXAMPLES["Transform"] = PlaygroundConfig()
+    EXAMPLES["Multi-doc"] = PlaygroundConfig(
+        source_schemas=[SOURCE_SCHEMA, ORG_SOURCE_SCHEMA],
+        source_instances=[
+            _person_doc("https://example.org/people/jane", "Jane Doe"),
+            _person_doc("https://example.org/people/joe", "Joe Bloggs"),
+            ORG_DOC,
+        ],
+        target_schemas=[TARGET_SCHEMA, TEAM_TARGET_SCHEMA],
+    )
+
+
+_define_examples()
 
 
 def looks_like_url(value: str) -> bool:
