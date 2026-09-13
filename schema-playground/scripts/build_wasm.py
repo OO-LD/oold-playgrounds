@@ -134,6 +134,74 @@ def patch_worker(worker: Path, wheel_names: list[str]) -> None:
     print(f"patched {worker.name}: app wheel by URL; oold and panelini without their unused dependencies")
 
 
+#: Inserted after the live document is embedded. ``panel convert`` prerenders the app into
+#: the page so something is visible while Pyodide boots; on the worker's render the glue
+#: removes the prerendered views and DOM but leaves the prerendered ``Document`` registered.
+#: That stale document keeps its whole model graph alive (a second copy of every editor) and
+#: sits at ``Bokeh.documents[0]``, where any outside automation finds it first and talks to a
+#: document nothing on screen listens to.
+_DISPOSE_STALE_DOCS = """\
+          const [views] = await Bokeh.embed.embed_items(docs_json, render_items)
+
+          // The prerendered document is not removed with its views; drop it so
+          // Bokeh.documents holds exactly the live one and its models can be collected.
+          for (const staleDoc of Bokeh.documents.splice(0, Bokeh.documents.length - 1)) {
+            staleDoc.clear()
+          }
+"""
+
+#: A handle for outside automation: the live document, the editor models, and the element a
+#: model renders into (Panel keeps model ids out of the DOM, so the view tree is the only
+#: path from a model to its pixels).
+_PLAYGROUND_HANDLE = """\
+          pyodideWorker.jsdoc = jsdoc = [...views.roots.values()][0].model.document
+
+          window.__playground = {
+            get document() { return pyodideWorker.jsdoc },
+            editors() {
+              const out = []
+              pyodideWorker.jsdoc._all_models.forEach((m) => {
+                if (/Monaco/i.test(m.type || '')) out.push(m)
+              })
+              return out
+            },
+            viewOf(model) {
+              // Panel ESM components split in two: the wrapper model owns the view, its
+              // .data model carries the synced properties (and is what editors() returns).
+              const stack = Object.values(Bokeh.index)
+              while (stack.length) {
+                const view = stack.pop()
+                if (view.model === model || view.model?.data === model) return view
+                if (view.child_views) stack.push(...view.child_views)
+              }
+              return null
+            },
+            elementOf(model) {
+              const view = this.viewOf(model)
+              return view ? view.el : null
+            },
+          }
+"""
+
+
+def patch_page(page: Path) -> None:
+    """Drop the prerendered document once the live one is embedded, and expose a handle."""
+    text = page.read_text(encoding="utf-8")
+
+    embed = "          const [views] = await Bokeh.embed.embed_items(docs_json, render_items)\n"
+    if embed not in text:
+        sys.exit(f"{page.name}: the embed call the disposal hooks onto was not found")
+    text = text.replace(embed, _DISPOSE_STALE_DOCS, 1)
+
+    jsdoc = "          pyodideWorker.jsdoc = jsdoc = [...views.roots.values()][0].model.document\n"
+    if jsdoc not in text:
+        sys.exit(f"{page.name}: the jsdoc assignment the handle hooks onto was not found")
+    text = text.replace(jsdoc, _PLAYGROUND_HANDLE, 1)
+
+    page.write_text(text, encoding="utf-8")
+    print(f"patched {page.name}: stale prerender document disposed; window.__playground exposed")
+
+
 def main() -> None:
     wheel_names = [build_wheel(), build_panelini_wheel()]
     command = [
@@ -156,6 +224,7 @@ def main() -> None:
         raise SystemExit(code)
 
     patch_worker(OUT / f"{APP.stem}.js", wheel_names)
+    patch_page(OUT / f"{APP.stem}.html")
     print(f"Serve it with: python -m http.server --directory {OUT}")
 
 
