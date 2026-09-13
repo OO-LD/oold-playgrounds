@@ -324,7 +324,9 @@ def _define_examples() -> None:
         source_schemas=[SIMPLE_SCHEMA],
         source_instances=[SIMPLE_INSTANCE],
         target_schemas=[SIMPLE_SCHEMA],
-        collapsed_panes=["Target schemas"],
+        # the whole right-hand side is folded away: this example is about authoring one
+        # schema and one instance, the transform only distracts from that
+        collapsed_panes=["Target schemas", "Transformed instances"],
     )
     EXAMPLES["Transform"] = PlaygroundConfig()
     EXAMPLES["Multi-doc"] = PlaygroundConfig(

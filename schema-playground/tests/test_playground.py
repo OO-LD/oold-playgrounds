@@ -493,7 +493,7 @@ def test_examples_are_complete_sessions():
     assert sum("members" in d for d in emitted) == 1
 
     apply_example(state, "Simple")
-    assert state.collapsed_panes == ["Target schemas"]
+    assert state.collapsed_panes == ["Target schemas", "Transformed instances"]
     assert len(state.source_instances) == 1
     assert len(state.target_instances) == 1
 
@@ -668,8 +668,8 @@ def test_an_example_collapse_survives_leaving_paste_mode():
     state.use_paste = True
     apply_example(state, "Simple")
 
-    assert state.collapsed_panes == ["Target schemas"], state.collapsed_panes
-    assert split.collapsed_titles() == ["Target schemas"]
+    assert state.collapsed_panes == ["Target schemas", "Transformed instances"], state.collapsed_panes
+    assert split.collapsed_titles() == ["Target schemas", "Transformed instances"]
 
 
 def test_an_empty_output_explains_itself():
