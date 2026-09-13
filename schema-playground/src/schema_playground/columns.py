@@ -19,7 +19,6 @@ import param
 from panelini.panels.monacoeditor import MonacoEditor
 
 from schema_playground import config as cfg
-from schema_playground.graph import graph_data  # noqa: F401 - re-exported for convenience
 from schema_playground.terms import terms_table
 from schema_playground.transform import JSON_LD
 
@@ -32,6 +31,9 @@ EDITOR_HEIGHT = 420
 EDITOR_OPTIONS = {
     "fontSize": 12,
     "quickSuggestions": {"other": True, "comments": False, "strings": True},
+    # Editors cover most of the page; monaco consuming every wheel event would make the page
+    # unscrollable wherever the pointer rests on one.
+    "scrollbar": {"alwaysConsumeMouseWheel": False},
 }
 
 
@@ -183,8 +185,18 @@ class DocumentEditor(pn.viewable.Viewer):
         return self._editor
 
 
+#: Validator wording translated for readers who do not know the pipeline's vocabulary.
+_FRIENDLY = {
+    "produced no triples": "produced no triples (none of its properties are mapped to RDF)",
+}
+
+
 def error_pane(state: param.Parameterized, field: str) -> pn.viewable.Viewable:
-    """The validation report for one editor, directly beneath it."""
+    """The validation report for one editor, directly beneath it.
+
+    A message starting with ``hint:`` is not a failure but an explanation of an empty result,
+    so it renders amber rather than red.
+    """
 
     def render(message: str) -> pn.viewable.Viewable:
         if not message:
@@ -193,9 +205,15 @@ def error_pane(state: param.Parameterized, field: str) -> pn.viewable.Viewable:
                 sizing_mode="stretch_width",
                 margin=(2, 6),
             )
+        colour = "#c62828"
+        if message.startswith("hint:"):
+            colour = "#b26a00"
+            message = message[len("hint:") :].strip()
+        for phrase, friendly in _FRIENDLY.items():
+            message = message.replace(phrase, friendly)
         body = "<br>".join(line for line in message.splitlines() if line.strip())
         return pn.pane.HTML(
-            "<div style='color:#c62828;font-size:12px;white-space:normal'>" + body + "</div>",
+            f"<div style='color:{colour};font-size:12px;white-space:normal'>" + body + "</div>",
             sizing_mode="stretch_width",
             margin=(2, 6),
         )
@@ -204,7 +222,9 @@ def error_pane(state: param.Parameterized, field: str) -> pn.viewable.Viewable:
 
 
 def _tabs(*panels: tuple[str, Any]) -> pn.Tabs:
-    return pn.Tabs(*panels, sizing_mode="stretch_both", dynamic=False)
+    # stretch_width, not stretch_both: a column stretched to the viewport would push the
+    # validation report to the bottom of the page, far from the editor it belongs to.
+    return pn.Tabs(*panels, sizing_mode="stretch_width", dynamic=False)
 
 
 def schema_column(
@@ -230,7 +250,7 @@ def schema_column(
             ("Terms", pn.Column(terms, scroll=True, height=EDITOR_HEIGHT)),
         ),
         error_pane(state, error_field),
-        sizing_mode="stretch_both",
+        sizing_mode="stretch_width",
     )
 
 
@@ -244,10 +264,13 @@ def graph_pane(state: param.Parameterized, field: str) -> pn.viewable.Viewable:
         options={
             "physics": {"stabilization": True},
             "interaction": {"hover": True},
-            "edges": {"font": {"size": 10, "align": "middle"}},
+            "edges": {"font": {"size": 10, "align": "horizontal"}},
         },
         height=EDITOR_HEIGHT,
         sizing_mode="stretch_width",
+        # An opaque canvas: the page background is decorated, and nodes floating over the
+        # artwork read as a rendering glitch.
+        styles={"background": "#ffffff", "border": "1px solid #e0e0e0", "border-radius": "4px"},
     )
 
     def update(data: dict) -> None:
@@ -300,5 +323,5 @@ def instance_column(
     return pn.Column(
         _tabs(*panels),
         error_pane(state, error_field),
-        sizing_mode="stretch_both",
+        sizing_mode="stretch_width",
     )

@@ -183,17 +183,27 @@ def chain(
     expected to hold half-written input.
     """
     out: list[dict[str, Any]] = []
-    seen: set[int] = set()
+    # Guarded by $id and by the $ref string, not by object identity: a resolver that fetches
+    # returns a fresh dict per call, so a cyclic chain (A extends B extends A) would never
+    # revisit the same object and recurse without bound.
+    seen: set[Any] = set()
+    seen_refs: set[str] = set()
 
     def walk(node: dict[str, Any]) -> None:
-        if not isinstance(node, dict) or id(node) in seen:
+        if not isinstance(node, dict):
             return
-        seen.add(id(node))
+        key = node.get("$id") if isinstance(node.get("$id"), str) else id(node)
+        if key in seen:
+            return
+        seen.add(key)
         for entry in node.get("allOf") or []:
             if not isinstance(entry, dict):
                 continue
             ref = entry.get("$ref")
             if isinstance(ref, str) and resolve is not None:
+                if ref in seen_refs:
+                    continue
+                seen_refs.add(ref)
                 parent = resolve(ref)
                 if parent is not None:
                     walk(parent)

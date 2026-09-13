@@ -26,7 +26,14 @@ from schema_playground.columns import (
     schema_column,
 )
 from schema_playground.split import Pane, SplitColumns
-from schema_playground.state import PlaygroundState, document_label, meta_schema, meta_store
+from schema_playground.state import (
+    CONSENSUS,
+    PlaygroundState,
+    document_label,
+    meta_schema,
+    meta_store,
+    ref_resolver,
+)
 from schema_playground.mappings import chain, set_name
 from schema_playground.transform import JSON_LD, TURTLE
 
@@ -34,16 +41,25 @@ logger = logging.getLogger(__name__)
 
 TITLE = "OO-LD Playground"
 SOURCE_PANES = ("Source schemas", "Source instances")
+ALL_PANES = ("Source schemas", "Source instances", "Target schemas", "Transformed instances")
+
+#: The state fields that make up a shareable session, taken from the config model so the two
+#: cannot drift apart: a field added there is persisted, applied and matched automatically.
+#: Derived state fields are recomputed from these, so the URL never carries them.
+SESSION_FIELDS: tuple[str, ...] = tuple(cfg.PlaygroundConfig.model_fields)
 
 
 def _chain_of(state: PlaygroundState, field: str) -> list[dict[str, Any]]:
-    text, error = cfg.resolve_source(getattr(state, field))
+    raw = getattr(state, field)
+    text, error = cfg.resolve_source(raw)
     if error:
         return []
     document, parse_error = cfg.parse_document(text)
     if parse_error or not isinstance(document, dict):
         return []
-    return chain(document, None)
+    # The same resolver the pipeline uses, so the Terms table shows the inherited terms of a
+    # URL-loaded chain rather than a shorter reading than the transform's.
+    return chain(document, ref_resolver(cfg.source_base(raw)))
 
 
 def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn.Column]:
@@ -53,12 +69,7 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
     columns because it changes which of them are in play; the editor sits between the two
     halves, where the graph it supplies enters.
     """
-    toggle = pn.widgets.Toggle(
-        name="Paste RDF instead",
-        value=state.use_paste,
-        button_type="primary" if state.use_paste else "default",
-        width=200,
-    )
+    toggle = pn.widgets.Toggle(name="Paste RDF instead", value=state.use_paste, width=200)
     from panelini.panels.monacoeditor import MonacoEditor
 
     turtle_editor = MonacoEditor(
@@ -83,7 +94,6 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
         tabs,
         error_pane(state, "bus_error"),
         width=320,
-        sizing_mode="stretch_height",
         margin=(0, 4),
         visible=state.use_paste,
     )
@@ -98,24 +108,37 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
     jsonld_editor.param.watch(apply, "value")
     tabs.param.watch(apply, "active")
 
-    def on_toggle(event: Any) -> None:
-        state.use_paste = bool(event.new)
-        body.visible = state.use_paste
-        toggle.button_type = "primary" if state.use_paste else "default"
-        toggle.name = "Pasted RDF is the input" if state.use_paste else "Paste RDF instead"
+    # The state owns the mode; the widgets only reflect it. Examples and URL-restored
+    # sessions set ``use_paste`` directly, and every visual (label, colour, visibility, the
+    # folded source columns) must follow those paths exactly as it follows a click.
+    def sync(*_events: Any) -> None:
+        active = state.use_paste
+        if toggle.value != active:
+            toggle.value = active
+        toggle.button_type = "primary" if active else "default"
+        toggle.name = "Pasted RDF is the input" if active else "Paste RDF instead"
+        body.visible = active
         # The source columns no longer feed anything, so they fold away to give the pasted
         # graph and its readings the width.
-        split.collapse(*SOURCE_PANES, collapsed=state.use_paste)
-        if state.use_paste:
-            apply()
+        split.collapse(*SOURCE_PANES, collapsed=active)
+
+    def on_toggle(event: Any) -> None:
+        wanted = bool(event.new)
+        if wanted != state.use_paste:
+            state.use_paste = wanted
+            if wanted:
+                apply()
 
     toggle.param.watch(on_toggle, "value")
+    state.param.watch(sync, "use_paste")
+    sync()
 
     toolbar = pn.Row(
         toggle,
         pn.pane.HTML(
             "<small style='color:var(--muted-text-color,#666)'>"
-            "replaces the source columns as the input for the right-hand side</small>",
+            "provide Turtle or JSON-LD directly; it replaces the source columns as the input"
+            "</small>",
             margin=(10, 6),
         ),
         pn.HSpacer(),
@@ -165,19 +188,28 @@ def document_selector(
 ) -> pn.Row:
     """The document chooser above a column: label per document, plus add and remove.
 
-    Labels are a schema's ``$id`` or an instance's ``@id``, shortened; ``template`` supplies
-    the content of an added document (a callable receives the state), and without one the
-    list is read-only (the transformed side, whose documents are emitted, not authored).
+    Labels are a schema's ``$id`` or an instance's ``@id``, shortened; a document that no
+    longer parses mid-edit keeps its last good name rather than turning into "instance 0"
+    under the user's cursor. ``template`` supplies the content of an added document (a
+    callable receives the state), and without one the list is read-only (the transformed
+    side, whose documents are emitted, not authored). The buttons carry no hover tooltips:
+    a tooltip next to a small button covers its neighbour and steals the next click.
     """
-    select = pn.widgets.Select(name="", options={f"{kind} 0": 0}, value=0, width=220)
-    add = pn.widgets.Button(name="+", width=32, button_type="light", description=f"Add a {kind}")
-    remove = pn.widgets.Button(name="-", width=32, button_type="light", description=f"Remove this {kind}")
+    select = pn.widgets.Select(name="", options={f"{kind} 0": 0}, value=0, width=200)
+    position = pn.pane.HTML("", margin=(10, 2), visible=False)
+    add = pn.widgets.Button(name="+", width=32, button_type="light")
+    remove = pn.widgets.Button(name="-", width=32, button_type="light")
+    last_labels: dict[int, str] = {}
 
     def refresh(*_events: Any) -> None:
         documents = list(getattr(state, list_field) or [])
         options: dict[str, int] = {}
         for index, text in enumerate(documents):
-            label = document_label(text, f"{kind} {index}")
+            label = document_label(text, "")
+            if label:
+                last_labels[index] = label
+            else:
+                label = last_labels.get(index, f"{kind} {index}")
             while label in options:
                 label += " "
             options[label] = index
@@ -186,6 +218,8 @@ def document_selector(
         values = list(select.options.values())
         select.value = current if current in values else (values[0] if values else 0)
         remove.disabled = len(documents) <= 1
+        position.object = f"<small>{min(current, len(documents) - 1) + 1} of {len(documents)}</small>"
+        position.visible = len(documents) > 1
 
     def on_select(event: Any) -> None:
         if event.new is not None and event.new != getattr(state, index_field):
@@ -195,6 +229,7 @@ def document_selector(
         documents = list(getattr(state, list_field) or [])
         content = template(state) if callable(template) else template
         documents.append(content)
+        last_labels.clear()
         setattr(state, list_field, documents)
         setattr(state, index_field, len(documents) - 1)
 
@@ -204,6 +239,7 @@ def document_selector(
             return
         index = min(getattr(state, index_field), len(documents) - 1)
         del documents[index]
+        last_labels.clear()
         setattr(state, index_field, max(0, index - 1))
         setattr(state, list_field, documents)
 
@@ -213,7 +249,7 @@ def document_selector(
     add.on_click(on_add)
     remove.on_click(on_remove)
 
-    widgets: list[Any] = [select]
+    widgets: list[Any] = [select, position]
     if template is not None:
         widgets += [add, remove]
     return pn.Row(*widgets, sizing_mode="stretch_width", margin=(0, 2))
@@ -221,13 +257,13 @@ def document_selector(
 
 def rdf_controls(state: PlaygroundState) -> pn.Row:
     """Serialization and mapping-set choice for the exported graph."""
-    fmt = pn.widgets.Select(name="", options={"Turtle": TURTLE, "JSON-LD": JSON_LD}, value=state.rdf_format, width=110)
+    fmt = pn.widgets.Select(name="", options={"Turtle": TURTLE, "JSON-LD": JSON_LD}, value=state.rdf_format, width=100)
     fmt.param.watch(lambda event: setattr(state, "rdf_format", event.new), "value")
 
-    mapping = pn.widgets.Select(name="", options={"consensus (declared)": ""}, value="", width=210)
+    mapping = pn.widgets.Select(name="", options={CONSENSUS: ""}, value="", width=180)
 
     def refresh_options(*_events: Any) -> None:
-        options = {"consensus (declared)": ""}
+        options = {CONSENSUS: ""}
         for set_id in state.available_sets:
             options[set_name(set_id)] = set_id
         mapping.options = options
@@ -239,9 +275,9 @@ def rdf_controls(state: PlaygroundState) -> pn.Row:
     mapping.param.watch(lambda event: setattr(state, "mapping_set", event.new or ""), "value")
 
     return pn.Row(
-        pn.pane.HTML("<small>Serialization</small>", margin=(8, 2)),
+        pn.pane.HTML("<small>RDF format</small>", margin=(8, 2)),
         fmt,
-        pn.pane.HTML("<small>Mapping set</small>", margin=(8, 2)),
+        pn.pane.HTML("<small>Vocabulary mapping</small>", margin=(8, 2)),
         mapping,
         sizing_mode="stretch_width",
         margin=0,
@@ -269,42 +305,61 @@ class _PaneLogHandler(logging.Handler):
             )
 
 
-ALL_PANES = ("Source schemas", "Source instances", "Target schemas", "Transformed instances")
+def apply_config(state: PlaygroundState, config: cfg.PlaygroundConfig) -> None:
+    """Apply a complete session in one step.
+
+    Picking an example and loading a shared URL go through here, so the two are the same
+    operation by construction. One batch: applying field by field would run the pipeline once
+    per field and pass through half-applied sessions on the way.
+    """
+    with param.parameterized.batch_call_watchers(state):
+        for field in SESSION_FIELDS:
+            value = getattr(config, field)
+            setattr(state, field, list(value) if isinstance(value, list) else value)
+        state.target_instance_idx = 0
 
 
 def apply_example(state: PlaygroundState, name: str) -> None:
     """Load a reference example: the same fields a shared URL of that config would seed."""
-    example = cfg.EXAMPLES[name]
-    with param.parameterized.batch_call_watchers(state):
-        state.source_schemas = list(example.source_schemas)
-        state.source_instances = list(example.source_instances)
-        state.target_schemas = list(example.target_schemas)
-        state.source_schema_idx = 0
-        state.source_instance_idx = 0
-        state.target_schema_idx = 0
-        state.target_instance_idx = 0
-        state.mapping_set = ""
-        state.use_paste = False
-        state.pasted_rdf = ""
-        state.collapsed_panes = list(example.collapsed_panes)
+    apply_config(state, cfg.EXAMPLES[name])
     logger.info("loaded the %s example", name)
 
 
+def active_example(state: PlaygroundState) -> str | None:
+    """The example the current session equals, if it equals any.
+
+    Compared as full configs: after any edit the session is nobody's example any more, and
+    highlighting one anyway would claim content the user is no longer looking at.
+    """
+    try:
+        snapshot = cfg.PlaygroundConfig(**{field: getattr(state, field) for field in SESSION_FIELDS})
+    except Exception:
+        return None
+    for name, example in cfg.EXAMPLES.items():
+        if example == snapshot:
+            return name
+    return None
+
+
 def example_switcher(state: PlaygroundState) -> pn.Row:
-    buttons = pn.widgets.RadioButtonGroup(
-        options=list(cfg.EXAMPLES),
-        # the default session IS the Transform example; starting anywhere else would either
-        # mislabel the content or (with the first option preselected) make its button a no-op
-        value="Transform",
-        button_type="light",
-        button_style="outline",
-    )
-    buttons.param.watch(lambda event: event.new and apply_example(state, event.new), "value")
-    return pn.Row(
-        pn.pane.HTML("<small>Examples</small>", margin=(10, 2)),
-        buttons,
-        margin=(0, 12, 0, 2),
-    )
+    """One button per reference example; the one matching the current session is filled."""
+    buttons: dict[str, pn.widgets.Button] = {}
+
+    def refresh(*_events: Any) -> None:
+        active = active_example(state)
+        for name, button in buttons.items():
+            button.button_type = "primary" if name == active else "default"
+            button.button_style = "solid" if name == active else "outline"
+
+    row = pn.Row(pn.pane.HTML("<small><b>Examples:</b></small>", margin=(10, 2)), margin=(0, 12, 0, 2))
+    for name in cfg.EXAMPLES:
+        button = pn.widgets.Button(name=name, width=92)
+        button.on_click(lambda _event, name=name: apply_example(state, name))
+        buttons[name] = button
+        row.append(button)
+    state.param.watch(refresh, list(SESSION_FIELDS))
+    refresh()
+    return row
 
 
 def sync_collapse(state: PlaygroundState, split: SplitColumns) -> None:
@@ -321,7 +376,7 @@ def sync_collapse(state: PlaygroundState, split: SplitColumns) -> None:
             state.collapsed_panes = current
 
     state.param.watch(from_state, "collapsed_panes")
-    split._on_change = from_split
+    split.on_change = from_split
     from_state()
 
 
@@ -375,24 +430,6 @@ def log_panel() -> tuple[pn.Card, logging.Handler]:
     return pn.Card(terminal, title="Log", collapsed=True, sizing_mode="stretch_width"), handler
 
 
-#: The state fields that make up a shareable session. Derived fields are left out: they are
-#: recomputed from these, so putting them in the URL would only make the link longer.
-SESSION_FIELDS = (
-    "source_schemas",
-    "source_instances",
-    "target_schemas",
-    "source_schema_idx",
-    "source_instance_idx",
-    "target_schema_idx",
-    "pasted_rdf",
-    "use_paste",
-    "paste_format",
-    "rdf_format",
-    "mapping_set",
-    "collapsed_panes",
-)
-
-
 def bind_url(state: PlaygroundState) -> None:
     """Seed the session from the URL and keep the URL in step with it.
 
@@ -403,9 +440,7 @@ def bind_url(state: PlaygroundState) -> None:
 
     manager = UrlConfig(cfg.PlaygroundConfig, param_name="pg")
     if manager.has_config():
-        seeded = manager.get_config()
-        for field in SESSION_FIELDS:
-            setattr(state, field, getattr(seeded, field))
+        apply_config(state, manager.get_config())
         logger.info("session restored from the URL")
 
     def persist(*_events: Any) -> None:
@@ -422,7 +457,7 @@ def bind_url(state: PlaygroundState) -> None:
     state.param.watch(persist, list(SESSION_FIELDS))
 
 
-def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session: bool | None = None) -> None:
+def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session: bool | None = None) -> Any:
     """Overlay a loading spinner on the main area until the editors exist in the browser.
 
     The page's own load event fires long before Monaco does (the editor bundle is large), so
@@ -442,10 +477,11 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
         if id(editor) not in hidden_editors and not editor.ready
     ]
     if not editors:
-        return
+        return lambda: None
     main.loading = True
     pending = {id(editor) for editor in editors}
     doc = pn.state.curdoc
+    timer_box: dict[str, Any] = {}
     # Both must hold before the overlay may clear. The editors often report ready while the
     # session is still initialising, and a property change made in that window never reaches
     # the browser (verified: the server ends at css_classes=["main-object"] while the client
@@ -459,12 +495,15 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
     def try_clear() -> None:
         if not (gates["loaded"] and gates["finished"]):
             return
+        timer = timer_box.pop("timer", None)
+        if timer is not None:
+            timer.cancel()
         if doc is not None:
-            try:
+            # When scheduling fails the session is already gone; there is no overlay left to
+            # clear, and flipping the property from this thread would race the document lock.
+            with contextlib.suppress(Exception):
                 doc.add_next_tick_callback(flip)
-                return
-            except Exception:  # pragma: no cover - no running session
-                pass
+            return
         flip()
 
     def done(*_events: Any) -> None:
@@ -492,8 +531,9 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
         # The safety net: readiness normally clears the overlay, but when the editor module
         # cannot load at all (a blocked or unreachable bundle CDN), no editor ever reports
         # and only this timer stands between the user and a spinner that never leaves. A
-        # plain thread timer rather than a document timeout: those have failed silently
-        # before, and next_tick from a thread is the documented safe entry point.
+        # plain thread timer rather than a document timeout, so it fires even when the
+        # session never becomes responsive; next_tick from a thread is the documented safe
+        # entry point. Cancelled by try_clear on a normal boot.
         import threading
 
         def give_up() -> None:
@@ -507,6 +547,7 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
             timer = threading.Timer(30.0, give_up)
             timer.daemon = True
             timer.start()
+            timer_box["timer"] = timer
         except Exception:  # pragma: no cover - no threads (browser build)
             pass
     else:
@@ -514,9 +555,29 @@ def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session:
     return session_loaded
 
 
+def about_panel() -> pn.viewable.Viewable:
+    """What the app is and how to read it, behind the sidebar toggle."""
+    return pn.pane.Markdown(
+        """## About
+
+This playground demonstrates **OO-LD** (Object-Oriented Linked Data): JSON documents whose schemas are a JSON Schema and a JSON-LD context at once.
+
+**How to read the page:** the source documents on the left are validated against their schemas and exported into one RDF graph. Each target schema on the right reads that graph back and emits the transformed documents. Edit anything on the left and the right side follows.
+
+The URL always carries your whole session - share the link to share the state.
+
+- [OO-LD specification](https://oo-ld.github.io/oold-schema/latest/spec/)
+- [OO-LD documentation](https://oo-ld.github.io/oold-schema/)
+- [Playground source](https://github.com/OO-LD/oold-playgrounds)
+""",
+        sizing_mode="stretch_width",
+        margin=(0, 10),
+    )
+
+
 def build(state: PlaygroundState | None = None) -> Any:
     """The assembled application, ready to serve."""
-    pn.extension("codeeditor", "terminal", notifications=False)
+    pn.extension(notifications=False)
 
     log_card, _handler = log_panel()
     deferred = state is None and pn.state.curdoc is not None
@@ -543,7 +604,7 @@ def build(state: PlaygroundState | None = None) -> Any:
                     meta=meta,
                     store=store,
                 ),
-                sizing_mode="stretch_both",
+                sizing_mode="stretch_width",
             ),
         ),
         Pane(
@@ -561,7 +622,7 @@ def build(state: PlaygroundState | None = None) -> Any:
                     controls=rdf_controls(state),
                     schema_field="source_editor_schema",
                 ),
-                sizing_mode="stretch_both",
+                sizing_mode="stretch_width",
             ),
         ),
         Pane(
@@ -576,7 +637,7 @@ def build(state: PlaygroundState | None = None) -> Any:
                     meta=meta,
                     store=store,
                 ),
-                sizing_mode="stretch_both",
+                sizing_mode="stretch_width",
             ),
         ),
         Pane(
@@ -592,7 +653,7 @@ def build(state: PlaygroundState | None = None) -> Any:
                     readonly=True,
                     schema_field="target_editor_schema",
                 ),
-                sizing_mode="stretch_both",
+                sizing_mode="stretch_width",
             ),
         ),
     ]
@@ -602,16 +663,27 @@ def build(state: PlaygroundState | None = None) -> Any:
     toolbar, paste_body = paste_panel(state, split)
     toolbar.insert(0, example_switcher(state))
 
+    subtitle = pn.pane.HTML(
+        "<div style='font-size:13px;color:var(--muted-text-color,#555)'>"
+        "Source documents (left) are validated against their schemas and exported into "
+        "<b>one RDF graph</b>; every target schema reads that graph back into the transformed "
+        "documents (right). Edit anything on the left - the right side follows."
+        "</div>",
+        sizing_mode="stretch_width",
+        margin=(0, 8, 6, 8),
+    )
+
     main = pn.Column(
         toolbar,
+        subtitle,
         # the paste editor sits on the left, where the source columns it replaces collapse to
         pn.Row(
             paste_body,
-            pn.Column(split, sizing_mode="stretch_both"),
-            sizing_mode="stretch_both",
+            pn.Column(split, sizing_mode="stretch_width"),
+            sizing_mode="stretch_width",
         ),
         log_card,
-        sizing_mode="stretch_both",
+        sizing_mode="stretch_width",
     )
     _spin_until_ready(main, paste_body)
 
@@ -620,6 +692,7 @@ def build(state: PlaygroundState | None = None) -> Any:
 
         app = Panelini(title=TITLE, sidebar_enabled=True, sidebar_visible=False)
         app.main_set(objects=[main])
+        app.sidebar_set(objects=[about_panel()])
     except Exception as exc:  # pragma: no cover - panelini is optional at import time
         logger.warning("panelini unavailable (%s); falling back to a plain template", exc)
         return pn.template.FastListTemplate(title=TITLE, main=[main])

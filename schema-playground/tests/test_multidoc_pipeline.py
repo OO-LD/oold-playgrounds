@@ -16,10 +16,9 @@ Two findings shaped the transform and are pinned here:
   (``works_for``) would absorb the organization; ``reference_preserving_frame`` derives
   ``"@embed": "@never"`` from ``format: iri-reference`` and is the import default now;
 * a node nested under an embedded property is invisible to a type-filtered frame without an
-  ``rdf:type``; export now derives it from the property schema's
-  ``x-oold-instance-rdf-type`` (root types were always materialized), and where the property
-  schema declares none, an untyped nested node stays invisible - authored types win either
-  way.
+  ``rdf:type``; export derives it from the property schema's ``x-oold-instance-rdf-type``,
+  and where the property schema declares none, an untyped nested node stays invisible -
+  authored types win either way.
 """
 
 from __future__ import annotations

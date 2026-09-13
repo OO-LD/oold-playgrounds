@@ -40,7 +40,8 @@ def test_config_defaults_when_the_url_is_empty(location):
 def test_config_round_trips_and_always_emits_compressed(location):
     """A generated link stays short, whatever encoding it was written in."""
     manager = uc.UrlConfig(cfg.PlaygroundConfig, param_name="pg")
-    original = cfg.PlaygroundConfig(source_instance='{"name": "Jane"}', mapping_set="s:1")
+    original = cfg.PlaygroundConfig(source_instances=['{"name": "Jane"}'], mapping_set="s:1")
+    assert original.source_instances == ['{"name": "Jane"}'], "the field must exist and hold the value"
 
     manager.set_config(original)
 
@@ -517,3 +518,194 @@ def test_collapse_state_mirrors_the_split_layout():
 
     panes[0].collapsed = True
     assert "Source schemas" in state.collapsed_panes
+
+
+# -- construction and selection wiring --------------------------------------------
+
+
+def test_construction_runs_the_pipeline_at_most_once(monkeypatch):
+    """The watched list params are seeded during __init__; without the readiness gate each
+    assignment would pay the multi-second pipeline before the page can be served."""
+    runs = {"n": 0}
+    original = PlaygroundState.recompute
+
+    def counting(self):
+        if self._ready:
+            runs["n"] += 1
+        original(self)
+
+    monkeypatch.setattr(PlaygroundState, "recompute", counting)
+    PlaygroundState(compute=False)
+    assert runs["n"] == 0
+    PlaygroundState()
+    assert runs["n"] == 1
+
+
+def test_applying_a_config_is_one_recompute(monkeypatch):
+    """A shared URL or an example button applies many fields; the pipeline runs once."""
+    from schema_playground.app import apply_example
+
+    runs = {"n": 0}
+    original = PlaygroundState.recompute
+
+    def counting(self):
+        if self._ready:
+            runs["n"] += 1
+        original(self)
+
+    monkeypatch.setattr(PlaygroundState, "recompute", counting)
+    state = PlaygroundState()
+    runs["n"] = 0
+    apply_example(state, "Multi-doc")
+    assert runs["n"] == 1
+
+
+def test_selecting_a_document_refreshes_its_error():
+    """A dropdown selection alone must surface the selected document's problems: a broken
+    schema showing "valid" until the next edit misreports the session."""
+    state = PlaygroundState(source_schemas=[cfg.SOURCE_SCHEMA, '{"title": 123}'])
+    assert state.source_schema_error == ""
+
+    state.source_schema_idx = 1
+    assert state.source_schema_error, "the broken schema was selected, its error must show"
+
+    state.source_schema_idx = 0
+    assert state.source_schema_error == ""
+
+
+def test_selecting_an_instance_switches_the_editor_schema():
+    state = PlaygroundState(
+        source_schemas=[cfg.SOURCE_SCHEMA, ORG_SOURCE_SCHEMA],
+        source_instances=[_person_doc("https://example.org/people/jane", "Jane Doe"), ORG_DOC],
+    )
+    assert state.source_editor_schema.get("title") == "Person"
+
+    state.source_instance_idx = 1
+    assert state.source_editor_schema.get("title") == "Organization"
+
+
+def test_the_transformed_selection_follows_the_source_document():
+    state = PlaygroundState(
+        source_schemas=[cfg.SOURCE_SCHEMA, ORG_SOURCE_SCHEMA],
+        source_instances=[
+            _person_doc("https://example.org/people/jane", "Jane Doe"),
+            _person_doc("https://example.org/people/joe", "Joe Bloggs"),
+            ORG_DOC,
+        ],
+        target_schemas=[cfg.TARGET_SCHEMA, ORG_TARGET_SCHEMA],
+    )
+
+    state.source_instance_idx = 1
+    assert json.loads(state.target_instance)["id"] == "https://example.org/people/joe"
+
+    state.source_instance_idx = 0
+    assert json.loads(state.target_instance)["id"] == "https://example.org/people/jane"
+
+
+def test_session_fields_cover_the_config_and_the_state():
+    from schema_playground.app import SESSION_FIELDS
+
+    assert set(SESSION_FIELDS) == set(cfg.PlaygroundConfig.model_fields)
+    for field in SESSION_FIELDS:
+        assert field in PlaygroundState.param, field
+
+
+def test_active_example_tracks_the_session():
+    from schema_playground.app import active_example, apply_example
+
+    state = PlaygroundState()
+    assert active_example(state) == "Transform", "the default session is the Transform example"
+
+    apply_example(state, "Simple")
+    assert active_example(state) == "Simple"
+
+    state.source_instance = state.source_instance.replace("Jane", "Janet")
+    assert active_example(state) is None, "an edited session is nobody's example"
+
+
+def test_the_paste_toggle_mirrors_the_state():
+    """The paste mode is state-owned: examples and URL restores change it without a click,
+    and the toggle, the editor panel and the folded source columns must all follow."""
+    import panel as _pn
+
+    from schema_playground.app import ALL_PANES, SOURCE_PANES, apply_example, paste_panel
+    from schema_playground.split import Pane, SplitColumns
+
+    state = PlaygroundState()
+    split = SplitColumns([Pane(title, _pn.Column()) for title in ALL_PANES])
+    toolbar, body = paste_panel(state, split)
+    toggle = toolbar.objects[0]
+
+    state.use_paste = True
+    assert toggle.value is True
+    assert toggle.button_type == "primary"
+    assert body.visible is True
+    assert set(SOURCE_PANES) <= set(split.collapsed_titles())
+
+    apply_example(state, "Simple")
+    assert state.use_paste is False
+    assert toggle.value is False
+    assert toggle.button_type == "default"
+    assert body.visible is False
+    assert not set(SOURCE_PANES) & set(split.collapsed_titles())
+
+
+def test_an_empty_output_explains_itself():
+    """The transformed column never claims "valid" over nothing: an empty bus says why."""
+    state = PlaygroundState()
+    state.source_instance = '{"name": '
+    assert state.bus_error.startswith("hint:"), state.bus_error
+
+    state.source_instance = cfg.SOURCE_INSTANCE
+    state.use_paste = True
+    assert state.bus_error.startswith("hint:"), state.bus_error
+
+
+def test_the_chain_survives_a_cyclic_reference():
+    """A fetching resolver returns fresh dicts per call, so the cycle guard must work by
+    identity of the schema, not of the Python object."""
+    import copy
+
+    from schema_playground.mappings import chain
+
+    a = {"$id": "A.schema.json", "allOf": [{"$ref": "B.schema.json"}], "@context": {}}
+    b = {"$id": "B.schema.json", "allOf": [{"$ref": "A.schema.json"}], "@context": {}}
+
+    def resolve(ref):
+        return copy.deepcopy(b if "B" in ref else a)
+
+    result = chain(copy.deepcopy(a), resolve)
+    assert [member["$id"] for member in result] == ["B.schema.json", "A.schema.json"]
+
+
+def test_document_selector_adds_and_removes():
+    from schema_playground.app import NEW_SCHEMA_TEMPLATE, document_selector
+
+    state = PlaygroundState()
+    row = document_selector(state, "source_schemas", "source_schema_idx", "schema", NEW_SCHEMA_TEMPLATE)
+    select, position, add, remove = row.objects
+    assert remove.disabled is True
+    assert position.visible is False
+
+    add.clicks += 1
+    assert len(state.source_schemas) == 2
+    assert state.source_schema_idx == 1
+    assert remove.disabled is False
+    assert "2 of 2" in position.object
+
+    remove.clicks += 1
+    assert len(state.source_schemas) == 1
+    assert state.source_schema_idx == 0
+    assert remove.disabled is True
+
+
+def test_a_document_mid_edit_keeps_its_selector_label():
+    from schema_playground.app import document_selector
+
+    state = PlaygroundState()
+    row = document_selector(state, "source_instances", "source_instance_idx", "instance")
+    select = row.objects[0]
+    assert list(select.options) == ["jane"]
+
+    state.source_instance = '{"broken'
+    assert list(select.options) == ["jane"], "a document mid-edit keeps its last good name"

@@ -30,8 +30,8 @@ from schema_playground.transform import JSON_LD, NQUADS, TURTLE, from_rdf, to_rd
 
 logger = logging.getLogger(__name__)
 
-#: The consensus reading, offered as the first entry of the mapping-set dropdown.
-CONSENSUS = "consensus (declared)"
+#: The consensus reading (no mapping set applied), the first entry of the mapping dropdown.
+CONSENSUS = "as declared (default)"
 
 
 def _triples(nquads: str) -> int:
@@ -321,6 +321,20 @@ class PlaygroundState(param.Parameterized):
     bus_error = param.String(default="")
 
     def __init__(self, compute: bool = True, **params: Any) -> None:
+        # Both guards must exist before any watcher can fire. _ready suppresses recompute
+        # until construction is complete: the seeding below assigns the watched list params,
+        # and without the gate each assignment would run the multi-second pipeline once.
+        self._ready = False
+        self._syncing = False
+        # Per-document results of the last recompute, read back by _apply_selection: a
+        # dropdown click must not pay for the whole pipeline again.
+        self._source_chains: list[list[dict[str, Any]]] = []
+        self._target_chains: list[list[dict[str, Any]]] = []
+        self._schema_errors: list[str] = []
+        self._target_errors: list[str] = []
+        self._instance_errors: list[str] = []
+        self._instance_labels: list[str] = []
+        self._logged_problems = ""
         super().__init__(**params)
         # The scalar params seed the lists (and vice versa), so both single-document use -
         # every existing caller - and list-based construction end up consistent. Guarded:
@@ -337,6 +351,10 @@ class PlaygroundState(param.Parameterized):
         finally:
             self._syncing = False
         self._sync_views()
+        self.param.watch(
+            self._on_selection, ["source_schema_idx", "source_instance_idx", "target_schema_idx"]
+        )
+        self._ready = True
         # A server session can defer the first pass to after the page is delivered: the
         # validators and the RDF pipeline cost seconds, and running them before the document
         # exists means seconds of blank page instead of a loading indicator.
@@ -415,11 +433,6 @@ class PlaygroundState(param.Parameterized):
         document, parse_error = cfg.parse_document(text)
         return document, parse_error or ""
 
-    def _chain(self, schema: Any, field: str) -> list[dict[str, Any]]:
-        if not isinstance(schema, dict):
-            return []
-        return chain(schema, ref_resolver(cfg.source_base(getattr(self, field))))
-
     @param.depends(
         "source_schemas",
         "source_instances",
@@ -433,6 +446,8 @@ class PlaygroundState(param.Parameterized):
     )
     def recompute(self) -> None:
         """Recalculate every derived field, left to right, over every document."""
+        if not self._ready:
+            return
         schema_texts = list(self.source_schemas or [])
         instance_texts = list(self.source_instances or [])
         target_texts = list(self.target_schemas or [])
@@ -445,14 +460,25 @@ class PlaygroundState(param.Parameterized):
         if set_id and set_id not in sets:
             set_id = None
 
+        # -- every schema is validated, so a later selection change only has to pick
+        schema_errors: list[str] = []
+        for index, text in enumerate(schema_texts):
+            document, load_error = self._load(text)
+            schema_errors.append(load_error or validate(document, "schema", chain=source_chains[index]))
+        target_errors: list[str] = []
+        for index, text in enumerate(target_texts):
+            document, load_error = self._load(text)
+            target_errors.append(load_error or validate(document, "schema", chain=target_chains[index]))
+
         # -- the left-hand export: every instance through the schema its $schema names
         left_nquads = ""
         export_errors: list[str] = []
         instance_errors: list[str] = []
-        selected_instance_error = ""
+        instance_labels: list[str] = []
         for index, text in enumerate(instance_texts):
             instance, error = self._load(text)
             label = document_label(text, f"instance {index}")
+            instance_labels.append(label)
             schema_index = match_schema(instance, schema_texts)
             one_chain = source_chains[schema_index] if source_chains else []
             doc_error = error or ""
@@ -464,10 +490,7 @@ class PlaygroundState(param.Parameterized):
                     logger.warning("export of %s failed: %s", label, exc)
                 schema_doc, _ = self._load(schema_texts[schema_index]) if schema_texts else (None, "")
                 doc_error = doc_error or validate(instance, "instance", schema_doc, chain=one_chain)
-            if doc_error:
-                instance_errors.append(f"{label}: {doc_error}" if len(instance_texts) > 1 else doc_error)
-            if index == min(self.source_instance_idx, len(instance_texts) - 1):
-                selected_instance_error = doc_error
+            instance_errors.append(doc_error)
         if left_nquads:
             logger.info(
                 "exported %d triples from %d document(s) under %s",
@@ -496,9 +519,18 @@ class PlaygroundState(param.Parameterized):
                     logger.warning("could not read pasted RDF: %s", exc)
             else:
                 bus = ""
+            if not bus and not bus_error:
+                bus_error = "hint: nothing to read yet - paste Turtle or JSON-LD on the left"
         else:
             bus = left_nquads
             bus_error = "; ".join(export_errors)
+            # A "valid" label under an empty output would claim more than is true, so the
+            # transformed column says why it is empty instead.
+            if not bus and not bus_error:
+                if any(instance_errors) or any(schema_errors):
+                    bus_error = "hint: no output - fix the source documents first"
+                else:
+                    bus_error = "hint: the source documents export no RDF (no mapped properties yet)"
 
         # -- the right-hand import: each target schema frames the bus into its documents
         emitted: list[str] = []
@@ -532,24 +564,16 @@ class PlaygroundState(param.Parameterized):
                 except Exception:
                     target_rdf = bus
 
-        selected_schema, selected_schema_load_error = self._load(self.source_schema)
-        selected_target, selected_target_load_error = self._load(self.target_schema)
-        selected_source_chain = (
-            source_chains[min(self.source_schema_idx, len(source_chains) - 1)] if source_chains else []
-        )
-        selected_target_chain = (
-            target_chains[min(self.target_schema_idx, len(target_chains) - 1)] if target_chains else []
-        )
-        schema_error = selected_schema_load_error or validate(selected_schema, "schema", chain=selected_source_chain)
-        target_error = selected_target_load_error or validate(selected_target, "schema", chain=selected_target_chain)
+        self._log_problems(instance_labels, instance_errors, schema_errors, target_errors, bus_error)
 
         with param.parameterized.batch_call_watchers(self):
             self.available_sets = sets
-            # inline validation follows the schema the selected instance is processed by
-            selected_instance, _ = self._load(self.source_instance)
-            matched = match_schema(selected_instance, schema_texts)
-            self.source_editor_schema = editor_schema(source_chains[matched] if source_chains else [])
-            self.target_editor_schema = editor_schema(selected_target_chain)
+            self._source_chains = source_chains
+            self._target_chains = target_chains
+            self._schema_errors = schema_errors
+            self._target_errors = target_errors
+            self._instance_errors = instance_errors
+            self._instance_labels = instance_labels
             self.source_rdf = source_rdf
             self.target_rdf = target_rdf
             self.target_instances = emitted
@@ -557,12 +581,79 @@ class PlaygroundState(param.Parameterized):
             self.target_instance = self._view(emitted, self.target_instance_idx)
             self.source_graph = graph_data(left_nquads)
             self.target_graph = graph_data(bus)
-            self.source_schema_error = schema_error
-            self.source_instance_error = selected_instance_error or (
-                "; ".join(instance_errors) if instance_errors and len(instance_texts) > 1 else ""
-            )
-            self.target_schema_error = target_error
             self.bus_error = bus_error
+            self._apply_selection(follow=True)
+
+    def _log_problems(self, labels: list[str], *error_groups: Any) -> None:
+        """Every current problem, in the log exactly once per change.
+
+        Logged only on change: recompute runs on every keystroke, and repeating an unchanged
+        message a hundred times would bury the log's actual content.
+        """
+        flat: list[str] = []
+        instance_errors = error_groups[0]
+        for label, error in zip(labels, instance_errors):
+            if error:
+                flat.append(f"{label}: {error.splitlines()[0]}")
+        for group in error_groups[1:]:
+            values = group if isinstance(group, list) else [group]
+            flat.extend(value.splitlines()[0] for value in values if value and not value.startswith("hint:"))
+        combined = "; ".join(flat)
+        if combined and combined != self._logged_problems:
+            logger.warning("validation: %s", combined)
+        self._logged_problems = combined
+
+    def _on_selection(self, *_events: Any) -> None:
+        """A dropdown changed: re-pick the per-selection fields from the cached results."""
+        if not self._ready:
+            return
+        follow = any(event.name == "source_instance_idx" for event in _events)
+        with param.parameterized.batch_call_watchers(self):
+            self._apply_selection(follow=follow)
+
+    def _apply_selection(self, follow: bool = False) -> None:
+        """The derived fields that depend on which documents are selected.
+
+        ``follow`` also moves the transformed-side selection to the document answering the
+        selected source instance, so the two sides read as one story by default.
+        """
+
+        def pick(values: list[str], index: int) -> str:
+            return values[max(0, min(index, len(values) - 1))] if values else ""
+
+        self.source_schema_error = pick(self._schema_errors, self.source_schema_idx)
+        self.target_schema_error = pick(self._target_errors, self.target_schema_idx)
+        selected = pick(self._instance_errors, self.source_instance_idx)
+        selected_at = min(self.source_instance_idx, len(self._instance_errors) - 1)
+        others = [
+            f"{label}: {error}"
+            for position, (label, error) in enumerate(zip(self._instance_labels, self._instance_errors))
+            if error and position != selected_at
+        ]
+        self.source_instance_error = selected or ("; ".join(others) if others else "")
+
+        # inline validation follows the schema the selected instance is processed by
+        instance, _ = self._load(self._view(list(self.source_instances or []), self.source_instance_idx))
+        matched = match_schema(instance, list(self.source_schemas or []))
+        self.source_editor_schema = editor_schema(self._source_chains[matched] if self._source_chains else [])
+        target_chain = (
+            self._target_chains[min(self.target_schema_idx, len(self._target_chains) - 1)]
+            if self._target_chains
+            else []
+        )
+        self.target_editor_schema = editor_schema(target_chain)
+
+        if follow and isinstance(instance, dict):
+            wanted = instance.get("id") or instance.get("@id")
+            if isinstance(wanted, str):
+                for index, text in enumerate(self.target_instances or []):
+                    document, parse_error = cfg.parse_document(text)
+                    if parse_error or not isinstance(document, dict):
+                        continue
+                    if wanted in (document.get("id"), document.get("@id")):
+                        self.target_instance_idx = index
+                        self.target_instance = self._view(self.target_instances, index)
+                        break
 
 
 def _as_instance(document: Any, schema: Any) -> str:
