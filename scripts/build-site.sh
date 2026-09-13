@@ -53,6 +53,52 @@ HTML
 # copy vite lifts out of public/ is dead weight. Only the oold wheel is served.
 rm -rf "$OUT/ty/pyodide"
 
+echo "== embedding the chatbot client =="
+# Vendored into the site rather than loaded from a backend, so the site builds
+# and runs with no backend anywhere. Which backend the client talks to is a
+# runtime choice (?chatbot_backend=<url>): a visitor who has not asked for the
+# bot gets no iframe and nothing leaves their browser, which is what keeps the
+# landing page's "no server, no install, no account" true.
+if [ -n "${OSW_CHATBOT_CLIENT:-}" ] && [ -f "${OSW_CHATBOT_CLIENT}" ]; then
+  mkdir -p "$OUT/chatbot"
+  cp "$OSW_CHATBOT_CLIENT" "$OUT/chatbot/osw-chatbot-client.js"
+  "$PY" - "$OUT" <<'PY'
+import sys
+from pathlib import Path
+
+out = Path(sys.argv[1])
+MARKER = "data-osw-chatbot-embed"
+# Each entry page and its depth below site/, so the src stays relative and the
+# artifact can be served from a project path as well as from a domain root.
+PAGES = {
+    "ty/index.html": "..",
+    "schema/app.html": "..",
+    "jupyterlite/lab/index.html": "../..",
+}
+for rel, prefix in PAGES.items():
+    page = out / rel
+    if not page.exists():
+        print(f"   missing, skipped: {rel}")
+        continue
+    html = page.read_text(encoding="utf-8")
+    if MARKER in html:
+        print(f"   already embedded: {rel}")
+        continue
+    tag = f'<script {MARKER} src="{prefix}/chatbot/osw-chatbot-client.js"></script>'
+    close = html.rfind("</body>")
+    if close >= 0:
+        html = html[:close] + tag + "\n" + html[close:]
+    else:
+        # not every jupyterlite template closes the body
+        html = html + "\n" + tag + "\n"
+    page.write_text(html, encoding="utf-8")
+    print(f"   embedded: {rel}")
+PY
+else
+  echo "   skipped: point OSW_CHATBOT_CLIENT at osw-chatbot's"
+  echo "   src/osw_chatbot/client/osw-chatbot-client.js to embed it"
+fi
+
 # GitHub Pages serves the artifact through Jekyll unless told otherwise, which
 # strips paths beginning with an underscore. JupyterLite ships several.
 touch "$OUT/.nojekyll"
