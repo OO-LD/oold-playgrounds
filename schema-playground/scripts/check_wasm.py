@@ -51,12 +51,24 @@ def main() -> int:
         except Exception:
             ready = False
 
+        # The loading overlay must leave once the app rendered - a stuck spinner over a
+        # working app looks exactly like a broken app. Give it up to a minute: the browser
+        # build has no server whose timing this script could see.
+        overlay_cleared = False
+        if ready:
+            for _ in range(60):
+                if page.locator(".pn-loading").count() == 0:
+                    overlay_cleared = True
+                    break
+                page.wait_for_timeout(1000)
+
         page.wait_for_timeout(3000)
         page.screenshot(path=args.shot, full_page=False)
         body = ", ".join(found) or "(nothing rendered)"
         browser.close()
 
     print(f"ready: {ready}")
+    print(f"overlay cleared: {overlay_cleared}")
     print(f"screenshot: {args.shot}")
     print("\n--- rendered ---")
     print(body)
@@ -77,11 +89,12 @@ def main() -> int:
         print("(none)")
 
     # A JavaScript error is reported but does not by itself fail the check: the app is judged
-    # on whether it rendered and transformed, which is what a user would notice.
-    print(f"\nRESULT: {'OK' if ready else 'FAIL'}")
-    if errors and ready:
+    # on whether it rendered, transformed and became usable, which is what a user would notice.
+    passed = ready and overlay_cleared
+    print(f"\nRESULT: {'OK' if passed else 'FAIL'}")
+    if errors and passed:
         print("(the app works; the JavaScript errors above did not stop it)")
-    return 0 if ready else 1
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

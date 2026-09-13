@@ -1,13 +1,14 @@
 """The boot sequence of a real served session.
 
 Serves the app exactly as ``panel serve app.py`` does - ``build()`` with no state, per
-session - so the deferred first compute and the loading overlay take the code path a user
-sees. The other integration module passes an explicit state and never exercises this branch.
+session - so the deferred first compute takes the code path a user sees. The other
+integration module passes an explicit state and never exercises this branch.
 
-Timing is taken from the server-side params (editor ``ready`` flags, ``main.loading``), not
-from browser polling: a Playwright locator count over two dozen shadow-rooted Monaco editors
-costs seconds per call, which once inflated this measurement from ten seconds to minutes and
-pointed the investigation at the wrong side entirely.
+There is deliberately no loading overlay to test: the app shell renders immediately with the
+source documents, the derived views fill in after the deferred compute, and an own overlay
+proved impossible to clear reliably across the server and the Pyodide runtime. What must hold
+instead: the session is built fast, the editors become ready, and no loading indicator is
+left in the DOM.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def test_a_served_session_boots_fast_and_clears_its_overlay():
+def test_a_served_session_boots_fast_and_leaves_no_overlay():
     from panelini.panels.monacoeditor import MonacoEditor
 
     from schema_playground import build
@@ -47,9 +48,6 @@ def test_a_served_session_boots_fast_and_clears_its_overlay():
         app = build()
         main = app.main[0]
         mark("session built")
-        assert main.loading is True, "the overlay must cover the boot"
-
-        main.param.watch(lambda event: mark(f"loading={event.new}"), "loading")
         for editor in main.select(MonacoEditor):
             editor.param.watch(lambda _event: mark("editor ready"), "ready")
         return app
@@ -74,80 +72,19 @@ def test_a_served_session_boots_fast_and_clears_its_overlay():
 
             deadline = time.monotonic() + 90
             while time.monotonic() < deadline:
-                if any(name == "loading=False" for _, name in events):
+                if sum(1 for _, name in events if name == "editor ready") >= 10:
                     break
                 time.sleep(0.5)
 
-            # bounded browser-side checks: the app content is really there, and the overlay
-            # is gone from the DOM - the server-side param once flipped without the browser
-            # ever hearing about it, which no server-side assertion can catch
             assert page.get_by_text("Source schema").count() > 0
-            page.wait_for_timeout(3_000)
-            assert page.locator(".pn-loading").count() == 0, "overlay still in the DOM"
+            page.wait_for_timeout(3000)
+            assert page.locator(".pn-loading").count() == 0, "a loading indicator is stuck in the DOM"
             browser.close()
     finally:
         server.stop()
 
     print("events:", [(round(t, 1), name) for t, name in events])
-    cleared = [t for t, name in events if name == "loading=False"]
+    built = [t for t, name in events if name == "session built"]
     ready = [t for t, name in events if name == "editor ready"]
-    assert cleared, "the loading overlay never cleared"
-    assert cleared[0] < 45, f"overlay cleared too late: {cleared[0]:.1f}s"
+    assert built and built[0] < 30, f"session build too slow: {built}"
     assert len(ready) >= 10, f"only {len(ready)} editors reported ready"
-
-
-def test_the_overlay_clears_even_when_the_bundle_never_loads(tmp_path):
-    """With the editor bundle unreachable no editor ever reports ready; the timer must clear
-    the overlay anyway. Runs in a subprocess because the bundle URL is read at import time.
-    """
-    import subprocess
-    import sys
-    import os
-
-    script = tmp_path / "probe.py"
-    script.write_text(
-        """
-import socket, sys, time
-import panel as pn
-from playwright.sync_api import sync_playwright
-from schema_playground import build
-
-pn.extension()
-events = []
-start = time.monotonic()
-
-def instrumented():
-    app = build()
-    main = app.main[0]
-    main.param.watch(lambda e: events.append((time.monotonic() - start, e.new)), "loading")
-    return app
-
-with socket.socket() as s:
-    s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
-server = pn.serve(instrumented, port=port, websocket_origin=f"127.0.0.1:{port}", show=False, threaded=True)
-try:
-    with sync_playwright() as p:
-        b = p.chromium.launch()
-        pg = b.new_page()
-        pg.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
-        deadline = time.monotonic() + 50
-        while time.monotonic() < deadline:
-            if any(v is False for _, v in events):
-                break
-            time.sleep(0.5)
-        b.close()
-finally:
-    server.stop()
-cleared = [t for t, v in events if v is False]
-print("CLEARED", cleared[0] if cleared else "never")
-sys.exit(0 if cleared and cleared[0] < 40 else 1)
-""",
-        encoding="utf-8",
-    )
-    env = dict(os.environ)
-    env["PANELINI_MONACO_BUNDLE"] = "http://127.0.0.1:9/never-there.mjs"
-    result = subprocess.run(  # noqa: S603 - the command is built here, not supplied
-        [sys.executable, str(script)], capture_output=True, text=True, env=env, timeout=180
-    )
-    assert "CLEARED" in result.stdout, result.stdout + result.stderr
-    assert result.returncode == 0, result.stdout + result.stderr

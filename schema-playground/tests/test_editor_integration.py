@@ -101,18 +101,13 @@ def _token_classes(editor) -> set[str]:
     return set(editor.locator("[class*=mtk]").evaluate_all("els => els.map(e => e.className)"))
 
 
-def test_the_loading_overlay_clears(page):
-    """The boot overlay must not stay: a stuck spinner is worse than none.
-
-    That it *appears* is asserted deterministically in test_playground.py against the param
-    wiring; here in the browser the window between first paint and editor readiness is too
-    short to observe reliably.
-    """
+def test_no_loading_indicator_is_stuck(page):
+    """There is no boot overlay by design, and nothing else may leave one in the DOM."""
     for _ in range(30):
         if page.locator(".pn-loading").count() == 0:
             break
         page.wait_for_timeout(1_000)
-    assert page.locator(".pn-loading").count() == 0, "the loading overlay never cleared"
+    assert page.locator(".pn-loading").count() == 0, "a loading indicator never cleared"
 
 
 def test_instance_json_validates_against_the_chain(page):
