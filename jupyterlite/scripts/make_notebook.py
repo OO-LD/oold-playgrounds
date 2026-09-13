@@ -1,6 +1,8 @@
 """Generate the demo notebook from readable cell sources."""
 
+import ast
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,7 +11,12 @@ OUT = ROOT / "contents" / "oold_demo.ipynb"
 SETUP = '''\
 import importlib
 import importlib.metadata
+import os
 import sys
+
+# Must be set before anything imports oold.model: the binding is selected at
+# import time, and the legacy one rejects IRI strings for link fields.
+os.environ.setdefault("OOLD_DESCRIPTOR_BINDING", "1")
 
 import piplite
 
@@ -102,137 +109,10 @@ except Exception as exc:
     print("network patching unavailable:", type(exc).__name__, exc)
 '''
 
-NOTATION_MODELS = '''\
-from pydantic import Field
-
-from oold.backend.document_store import SimpleDictDocumentStore
-from oold.backend.interface import SetResolverParam, set_resolver
-from oold.model._notation import Link, LinkList, OoldField, OoldModel
-
-
-class Organization(OoldModel):
-    id: str
-    name: str | None = None
-    type: str | None = "ex:Organization"
-
-
-class Location(OoldModel):
-    id: str | None = None
-    address: str | None = None
-    type: str | None = "ex:Location"
-
-
-class Person(OoldModel):
-    id: str
-    name: str | None = None
-    type: str | None = "ex:Person"
-
-    # 1. no range= needed: the target is read from the annotation
-    knows: LinkList["Person"] = OoldField()
-
-    # 2. Link[T] inside the annotation (to-one and to-many)
-    employer: Link[Organization] = OoldField()
-    friends: list["Person"] = OoldField()
-
-    # 3. union: literal text | inline object | reference
-    location: str | Location | None = OoldField(link=True)
-
-
-Person.model_rebuild()
-print("models defined:", Person, Organization, Location)
-'''
-
-NOTATION_MAIN = '''\
-store = SimpleDictDocumentStore()
-store.store_json_dicts({
-    "ex:bob": {"id": "ex:bob", "name": "Bob", "type": "ex:Person"},
-    "ex:carol": {"id": "ex:carol", "name": "Carol", "type": "ex:Person"},
-    "ex:acme": {"id": "ex:acme", "name": "ACME", "type": "ex:Organization"},
-    "ex:eiffel": {"id": "ex:eiffel", "address": "Champ de Mars", "type": "ex:Location"},
-})
-set_resolver(SetResolverParam(iri="ex", resolver=store))
-
-alice = Person(
-    id="ex:alice",
-    name="Alice",
-    knows=["ex:bob", "ex:carol"],
-    employer="ex:acme",
-    friends=[Person(id="ex:bob", name="Bob")],
-)
-
-print("1. OoldField() - target inferred from the annotation")
-assert alice.knows[0].name == "Bob"
-assert isinstance(alice.knows[0], Person)
-print("   knows[0].name          =", alice.knows[0].name)
-print("   isinstance(.., Person) =", isinstance(alice.knows[0], Person))
-
-print("\\n2. Link[T] inside the annotation")
-assert isinstance(alice.employer, Organization)
-assert alice.employer.name == "ACME"
-assert isinstance(alice.friends[0], Person)
-print("   employer.name          =", alice.employer.name)
-print("   friends[0].name        =", alice.friends[0].name)
-
-print("\\n3. union arms: text | inline object | reference")
-text = Person(id="ex:p-text", location="at the Eiffel Tower")
-ref = Person(id="ex:p-ref", location={"@id": "ex:eiffel"})
-inline = Person(
-    id="ex:p-inline",
-    location={"id": "ex:office", "address": "Main St 1", "type": "ex:Location"},
-)
-blank = Person(id="ex:p-blank", location={"address": "no id", "type": "ex:Location"})
-
-assert text.location == "at the Eiffel Tower"
-assert isinstance(ref.location, Location)
-assert ref.location.address == "Champ de Mars"
-assert inline.location.address == "Main St 1"
-assert blank.link_iris("location") is None
-print("   text   ->", repr(text.location))
-print("   ref    ->", ref.location.address)
-print("   inline ->", inline.location.address)
-print("   blank  ->", blank.location.address, "(no IRI)")
-
-print("\\n4. serialisation: links to IRIs; references boxed where a literal arm exists")
-dumped = alice.model_dump(exclude_none=True)
-assert dumped["knows"] == ["ex:bob", "ex:carol"]
-assert dumped["employer"] == "ex:acme"
-assert ref.model_dump(exclude_none=True)["location"] == {"@id": "ex:eiffel"}
-assert isinstance(blank.model_dump(exclude_none=True)["location"], dict)
-print("   alice ->", dumped)
-print("   ref   ->", ref.model_dump(exclude_none=True))
-print("   blank ->", blank.model_dump(exclude_none=True))
-
-print("\\n5. lazy resolution and query DSL")
-lazy = Person(id="ex:lazy", knows=["ex:bob"])
-assert lazy.link_iris("knows") == ["ex:bob"]
-condition = Person.name == "Bob"
-assert condition.field == "name" and condition.value == "Bob"
-print("   link_iris('knows')     =", lazy.link_iris("knows"))
-print("   Person.name == 'Bob'   =", condition)
-
-print("\\n6. de-serialisation: every union arm survives a round trip")
-for label, value, expected in [
-    ("text     ", "at the Eiffel Tower", str),
-    ("reference", {"@id": "ex:eiffel"}, Location),
-    ("inline   ", {"address": "Main St 1", "type": "ex:Location"}, Location),
-]:
-    original = Person(id="ex:rt", location=value)
-    payload = original.model_dump(exclude_none=True)
-    restored = Person(**payload)
-    assert isinstance(restored.location, expected), label
-    shown = str(payload["location"])[:34]
-    print(f"   {label} {shown:36} -> {type(restored.location).__name__}")
-
-restored = Person(**alice.model_dump(exclude_none=True))
-assert [x.id for x in restored.knows] == ["ex:bob", "ex:carol"]
-assert restored.employer.name == "ACME"
-print("   lists and to-one links round trip too")
-
-print("\\nALL CHECKS PASSED")
-'''
-
 CODEGEN = '''\
+import ast
 import json
+import os
 
 OOLD_SCHEMA = {
     "@context": {
@@ -459,7 +339,9 @@ except Exception:
 '''
 
 SUMMARY = '''\
+import ast
 import json
+import os
 
 print(json.dumps(RESULTS, indent=2, default=str))
 print("\\nNOTEBOOK COMPLETE")
@@ -480,6 +362,69 @@ def code(text):
     }
 
 
+def find_examples_dir():
+    env = os.environ.get("OOLD_SRC")
+    if env:
+        return Path(env) / "examples"
+    here = ROOT
+    for _ in range(4):
+        candidate = here.parent / "oold-python" / "examples"
+        if candidate.is_dir():
+            return candidate
+        here = here.parent
+    raise SystemExit("oold-python examples not found; set OOLD_SRC")
+
+
+def split_example(source):
+    """Return (docstring, body without the __main__ guard, entry point name)."""
+    module = ast.parse(source)
+    doc = ast.get_docstring(module) or ""
+
+    lines = source.splitlines(keepends=True)
+    cut = len(lines)
+    for node in module.body:
+        if isinstance(node, ast.If) and ast.unparse(node.test).startswith("__name__"):
+            cut = node.lineno - 1
+            break
+
+    body = "".join(lines[:cut]).rstrip("\n")
+    if doc:
+        # The docstring is rendered as markdown above, so drop it from the code.
+        end = module.body[0].end_lineno
+        body = "".join(lines[end:cut]).strip("\n")
+
+    entry = next(
+        (n.name for n in module.body if isinstance(n, ast.FunctionDef) and n.name == "main"),
+        None,
+    )
+    return doc, body, entry
+
+
+EXAMPLES_DIR = find_examples_dir()
+
+# Read from the example rather than restating it here. A second copy of these
+# models drifted from the original every time the branch moved.
+NOTATION_DOC, NOTATION_SOURCE, NOTATION_ENTRY = split_example(
+    (EXAMPLES_DIR / "notation_example.py").read_text(encoding="utf-8")
+)
+
+NOTATION_RUN = f"{NOTATION_ENTRY}()\n"
+
+NOTATION_BIND = '''\
+# Bind the same objects at module level so the completion sections below have
+# something to introspect; main() keeps everything in its own frame.
+setup_backend()
+
+alice = Person(
+    id="ex:alice",
+    name="Alice",
+    knows=["ex:bob", "ex:carol"],
+    employer="ex:acme",
+    friends=[Person(id="ex:bob", name="Bob")],
+)
+print("alice:", alice.model_dump(exclude_none=True))
+'''
+
 CELLS = [
     md("# oold in JupyterLite\n\nStatic, serverless deployment. The kernel is Pyodide in the browser tab.\n"),
     md("## 1. Environment\n"),
@@ -489,8 +434,9 @@ CELLS = [
     code(INSTALL_OOLD),
     code(HTTP_SHIM),
     md("## 3. Link notations: `OoldField()`, `Link[T]`, union arms\n"),
-    code(NOTATION_MODELS),
-    code(NOTATION_MAIN),
+    code(NOTATION_SOURCE),
+    code(NOTATION_RUN),
+    code(NOTATION_BIND),
     md("## 4. Runtime code generation\n\nSchema in, pydantic source out, `exec` it. The resulting class has no source file.\n"),
     code(CODEGEN),
     code(EXEC_GENERATED),
@@ -520,6 +466,84 @@ NOTEBOOK = {
     "nbformat_minor": 5,
 }
 
-OUT.parent.mkdir(parents=True, exist_ok=True)
-OUT.write_text(json.dumps(NOTEBOOK, indent=1) + "\n", encoding="utf-8")
-print("wrote", OUT, len(CELLS), "cells")
+def notebook(cells):
+    return {
+        "cells": cells,
+        "metadata": NOTEBOOK["metadata"],
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+
+def write(path, cells):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(notebook(cells), indent=1) + "\n", encoding="utf-8")
+    print("wrote", path, len(cells), "cells")
+
+
+write(OUT, CELLS)
+
+
+# Notebooks generated from the oold-python examples.
+#
+# Only examples that can run under Pyodide are converted. The benchmark and
+# feature-check scripts drive each binding variant through
+# subprocess.run([sys.executable, ...]) because importing oold.model patches
+# pydantic.fields.FieldInfo process-wide; Emscripten has no subprocess, so they
+# cannot work here at all. backend_auth.py needs a private endpoint and
+# credentials, and linked_data_editor.py needs panel.
+EXAMPLES = ["notation_example", "wiki_data"]
+
+EXAMPLE_BOOTSTRAP = '''\
+import os
+
+# Selected at oold.model import time, so it has to be set before anything
+# imports it. The examples set it too; this covers the ones that do not.
+os.environ.setdefault("OOLD_DESCRIPTOR_BINDING", "1")
+
+import piplite
+
+# typing-extensions first: pyodide pins an older one and micropip refuses to
+# downgrade a dependency that is already imported.
+await piplite.install("typing-extensions>=4.14.0")
+await piplite.install("oold", keep_going=True)
+
+# pyodide_http.patch_all() covers requests and urllib, never httpx.
+await piplite.install("pyodide-http")
+import pyodide_http
+
+pyodide_http.patch_all()
+try:
+    import httpx
+    import requests
+
+    def _get(url, headers=None, verify=None, follow_redirects=True, params=None, **kw):
+        return requests.get(url, headers=headers, params=params, allow_redirects=follow_redirects)
+
+    httpx.get = _get
+except ImportError:
+    pass
+
+import oold
+
+print("oold", oold.__version__)
+'''
+
+
+
+for name in EXAMPLES:
+    source = (EXAMPLES_DIR / f"{name}.py").read_text(encoding="utf-8")
+    doc, body, entry = split_example(source)
+
+    cells = [
+        md(f"# {name}.py\n\nGenerated from `oold-python/examples/{name}.py`.\n"),
+        md(doc + "\n" if doc else "\n"),
+        md("## Environment\n"),
+        code(EXAMPLE_BOOTSTRAP),
+        md("## Example\n"),
+        code(body),
+    ]
+    if entry:
+        cells.append(code(f"{entry}()\n"))
+
+    write(ROOT / "contents" / f"{name}.ipynb", cells)

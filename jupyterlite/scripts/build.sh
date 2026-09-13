@@ -34,7 +34,7 @@ rm -rf "$ROOT/_output" "$ROOT/.jupyterlite.doit.db"
   --contents "$ROOT/contents" \
   --piplite-wheels "$WHEEL" \
   --no-libarchive \
-  --apps notebooks --apps repl \
+  --apps lab --apps notebooks --apps repl \
   --no-unused-shared-packages \
   --output-dir "$ROOT/_output")
 
