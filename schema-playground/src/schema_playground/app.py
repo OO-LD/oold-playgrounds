@@ -755,16 +755,16 @@ def build(state: PlaygroundState | None = None) -> Any:
     )
     busy: dict[str, Any] = {"target": workspace}
     main = pn.Column(
-        # two rows: the examples switch what is loaded, the paste toggle switches where the
-        # input comes from - sharing a line read as one control group
         pn.Row(
             example_switcher(state, busy),
             # aligned with the dropdown, which carries a label above itself
             pn.Column(share_button(), margin=(19, 6, 0, 0)),
             sizing_mode="stretch_width",
         ),
-        paste_toolbar,
         subtitle,
+        # directly under the sentence it belongs to: the toggle switches away from exactly
+        # the source-to-graph flow the subtitle describes
+        paste_toolbar,
         workspace,
         log_card,
         sizing_mode="stretch_width",
