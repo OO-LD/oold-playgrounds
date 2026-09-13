@@ -62,6 +62,19 @@ def main() -> int:
                     break
                 page.wait_for_timeout(1000)
 
+        # Exactly one live document: the prerendered one must be disposed on takeover, or a
+        # second copy of every model stays alive and Bokeh.documents[0] is a dead decoy.
+        single_document = False
+        handle = False
+        if ready:
+            page.wait_for_timeout(2000)
+            state = page.evaluate(
+                "() => ({docs: Bokeh.documents.length,"
+                " handle: !!(window.__playground && window.__playground.editors().length)})"
+            )
+            single_document = state["docs"] == 1
+            handle = bool(state["handle"])
+
         page.wait_for_timeout(3000)
         page.screenshot(path=args.shot, full_page=False)
         body = ", ".join(found) or "(nothing rendered)"
@@ -69,6 +82,8 @@ def main() -> int:
 
     print(f"ready: {ready}")
     print(f"overlay cleared: {overlay_cleared}")
+    print(f"single document: {single_document}")
+    print(f"playground handle: {handle}")
     print(f"screenshot: {args.shot}")
     print("\n--- rendered ---")
     print(body)
@@ -90,7 +105,7 @@ def main() -> int:
 
     # A JavaScript error is reported but does not by itself fail the check: the app is judged
     # on whether it rendered, transformed and became usable, which is what a user would notice.
-    passed = ready and overlay_cleared
+    passed = ready and overlay_cleared and single_document and handle
     print(f"\nRESULT: {'OK' if passed else 'FAIL'}")
     if errors and passed:
         print("(the app works; the JavaScript errors above did not stop it)")
