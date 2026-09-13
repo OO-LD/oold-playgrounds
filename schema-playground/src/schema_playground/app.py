@@ -39,7 +39,7 @@ from schema_playground.transform import JSON_LD, TURTLE
 
 logger = logging.getLogger(__name__)
 
-TITLE = "OO-LD Playground"
+TITLE = "OO-LD Schema Playground"
 SOURCE_PANES = ("Source schemas", "Source instances")
 ALL_PANES = ("Source schemas", "Source instances", "Target schemas", "Transformed instances")
 
@@ -116,11 +116,22 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
         if toggle.value != active:
             toggle.value = active
         toggle.button_type = "primary" if active else "default"
-        toggle.name = "Pasted RDF is the input" if active else "Paste RDF instead"
+        # Both labels name the action a click performs, not the current state: a toggle that
+        # reads as a status gives no hint that it is the way back.
+        toggle.name = "Back to schema input" if active else "Paste RDF instead"
         body.visible = active
         # The source columns no longer feed anything, so they fold away to give the pasted
-        # graph and its readings the width.
-        split.collapse(*SOURCE_PANES, collapsed=active)
+        # graph and its readings the width. Expressed through collapsed_panes rather than by
+        # driving the split directly: the collapse state has exactly one owner, so this
+        # cannot clobber a collapse list an example or a URL is applying at the same moment.
+        wanted = [
+            title
+            for title in ALL_PANES
+            if (title in SOURCE_PANES and active)
+            or (title not in SOURCE_PANES and title in (state.collapsed_panes or []))
+        ]
+        if wanted != list(state.collapsed_panes or []):
+            state.collapsed_panes = wanted
 
     def on_toggle(event: Any) -> None:
         wanted = bool(event.new)
@@ -341,36 +352,78 @@ def active_example(state: PlaygroundState) -> str | None:
     return None
 
 
-def example_switcher(state: PlaygroundState) -> pn.Row:
-    """One button per reference example; the one matching the current session is filled."""
-    buttons: dict[str, pn.widgets.Button] = {}
+def example_switcher(state: PlaygroundState, busy: dict[str, Any] | None = None) -> pn.Row:
+    """A dropdown of the reference examples, showing the one the session equals.
+
+    The blank entry is the resting position for a session that matches no example (anything
+    edited or URL-restored); selecting it does nothing, it only exists to be shown.
+
+    ``busy["target"]`` (filled by the caller once the layout exists) gets a loading overlay
+    while an example applies. The pipeline runs for seconds, and inside the selection handler
+    nothing would repaint until it finishes - so the work is deferred one tick, after the
+    overlay has reached the browser.
+    """
+
+    select = pn.widgets.Select(
+        name="Select example",
+        options=["", *cfg.EXAMPLES],
+        value=active_example(state) or "",
+        width=180,
+    )
+
+    def on_select(event: Any) -> None:
+        if not (event.new and event.new != active_example(state)):
+            return
+        name = event.new
+        target = (busy or {}).get("target")
+        doc = pn.state.curdoc
+        if target is None or doc is None:
+            apply_example(state, name)
+            return
+        target.loading = True
+
+        def work() -> None:
+            try:
+                apply_example(state, name)
+            finally:
+                target.loading = False
+
+        doc.add_timeout_callback(work, 50)
 
     def refresh(*_events: Any) -> None:
-        active = active_example(state)
-        for name, button in buttons.items():
-            button.button_type = "primary" if name == active else "default"
-            button.button_style = "solid" if name == active else "outline"
+        wanted = active_example(state) or ""
+        if select.value != wanted:
+            select.value = wanted
 
-    row = pn.Row(pn.pane.HTML("<small><b>Examples:</b></small>", margin=(10, 2)), margin=(0, 12, 0, 2))
-    for name in cfg.EXAMPLES:
-        button = pn.widgets.Button(name=name, width=92)
-        button.on_click(lambda _event, name=name: apply_example(state, name))
-        buttons[name] = button
-        row.append(button)
+    select.param.watch(on_select, "value")
     state.param.watch(refresh, list(SESSION_FIELDS))
-    refresh()
-    return row
+    return pn.Row(select, margin=(0, 12, 0, 8))
 
 
 def sync_collapse(state: PlaygroundState, split: SplitColumns) -> None:
-    """Keep the split layout and the session's collapse list mirrored, both ways."""
+    """Keep the split layout and the session's collapse list mirrored, both ways.
+
+    While the state is being applied to the layout, the layout's own change callback is
+    ignored: each pane flips individually, and echoing a half-applied layout back into the
+    state would overwrite the list currently being applied.
+    """
+    applying = {"on": False}
 
     def from_state(*_events: Any) -> None:
-        wanted = set(state.collapsed_panes or [])
-        for title in ALL_PANES:
-            split.collapse(title, collapsed=title in wanted)
+        if applying["on"]:
+            return
+        applying["on"] = True
+        try:
+            wanted = set(state.collapsed_panes or [])
+            for title in ALL_PANES:
+                split.collapse(title, collapsed=title in wanted)
+        finally:
+            applying["on"] = False
+        from_split()
 
     def from_split() -> None:
+        if applying["on"]:
+            return
         current = split.collapsed_titles()
         if current != list(state.collapsed_panes or []):
             state.collapsed_panes = current
@@ -660,8 +713,7 @@ def build(state: PlaygroundState | None = None) -> Any:
 
     split = SplitColumns(panes)
     sync_collapse(state, split)
-    toolbar, paste_body = paste_panel(state, split)
-    toolbar.insert(0, example_switcher(state))
+    paste_toolbar, paste_body = paste_panel(state, split)
 
     subtitle = pn.pane.HTML(
         "<div style='font-size:13px;color:var(--muted-text-color,#555)'>"
@@ -673,15 +725,20 @@ def build(state: PlaygroundState | None = None) -> Any:
         margin=(0, 8, 6, 8),
     )
 
+    # the paste editor sits on the left, where the source columns it replaces collapse to
+    workspace = pn.Row(
+        paste_body,
+        pn.Column(split, sizing_mode="stretch_width"),
+        sizing_mode="stretch_width",
+    )
+    busy: dict[str, Any] = {"target": workspace}
     main = pn.Column(
-        toolbar,
+        # two rows: the examples switch what is loaded, the paste toggle switches where the
+        # input comes from - sharing a line read as one control group
+        example_switcher(state, busy),
+        paste_toolbar,
         subtitle,
-        # the paste editor sits on the left, where the source columns it replaces collapse to
-        pn.Row(
-            paste_body,
-            pn.Column(split, sizing_mode="stretch_width"),
-            sizing_mode="stretch_width",
-        ),
+        workspace,
         log_card,
         sizing_mode="stretch_width",
     )

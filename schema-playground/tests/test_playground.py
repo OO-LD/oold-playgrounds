@@ -628,11 +628,12 @@ def test_the_paste_toggle_mirrors_the_state():
     and the toggle, the editor panel and the folded source columns must all follow."""
     import panel as _pn
 
-    from schema_playground.app import ALL_PANES, SOURCE_PANES, apply_example, paste_panel
+    from schema_playground.app import ALL_PANES, SOURCE_PANES, apply_example, paste_panel, sync_collapse
     from schema_playground.split import Pane, SplitColumns
 
     state = PlaygroundState()
     split = SplitColumns([Pane(title, _pn.Column()) for title in ALL_PANES])
+    sync_collapse(state, split)
     toolbar, body = paste_panel(state, split)
     toggle = toolbar.objects[0]
 
@@ -648,6 +649,27 @@ def test_the_paste_toggle_mirrors_the_state():
     assert toggle.button_type == "default"
     assert body.visible is False
     assert not set(SOURCE_PANES) & set(split.collapsed_titles())
+
+
+def test_an_example_collapse_survives_leaving_paste_mode():
+    """Applying an example while paste mode is active must end with exactly the example's
+    collapse list: the paste wiring folds panes too, and it must not clobber the list the
+    example is applying at the same moment."""
+    import panel as _pn
+
+    from schema_playground.app import ALL_PANES, apply_example, paste_panel, sync_collapse
+    from schema_playground.split import Pane, SplitColumns
+
+    state = PlaygroundState()
+    split = SplitColumns([Pane(title, _pn.Column()) for title in ALL_PANES])
+    sync_collapse(state, split)
+    paste_panel(state, split)
+
+    state.use_paste = True
+    apply_example(state, "Simple")
+
+    assert state.collapsed_panes == ["Target schemas"], state.collapsed_panes
+    assert split.collapsed_titles() == ["Target schemas"]
 
 
 def test_an_empty_output_explains_itself():
