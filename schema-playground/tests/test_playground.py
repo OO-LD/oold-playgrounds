@@ -310,33 +310,19 @@ def test_a_graph_node_error_is_reported_with_its_index():
     assert "@graph[0]" not in state.source_instance_error
 
 
-# -- the loading overlay ---------------------------------------------------------
+# -- the build has no boot overlay ------------------------------------------------
 
 
-def test_the_loading_overlay_follows_editor_readiness():
-    """main.loading turns on while editors boot and off once every visible one is ready."""
-    from panelini.panels.monacoeditor import MonacoEditor
-
+def test_build_leaves_no_loading_overlay():
+    """The page is operational as soon as it renders; the browser build additionally has the
+    convert splash. An own overlay proved impossible to clear reliably in both runtimes, so
+    nothing here may turn one on."""
     from schema_playground import build
-    from schema_playground.app import _spin_until_ready
 
     app = build(PlaygroundState())
     main = app.main[0]
-    # outside a session build() clears the overlay right away (nothing would ever be ready)
     assert main.loading is False
-
-    # a fresh column, because build() above already wired its own watchers on its editors
-    editor = MonacoEditor(value="{}", height=100)
-    isolated = pn.Column(editor)
-    session_loaded = _spin_until_ready(isolated, pn.Column(), in_session=True)
-    assert isolated.loading is True
-
-    editor.ready = True
-    # readiness alone must NOT clear: a flip before the session's load event never reaches
-    # the browser, so the overlay waits for whichever gate closes last
-    assert isolated.loading is True
-    session_loaded()
-    assert isolated.loading is False
+    assert all(child.loading is False for child in main if hasattr(child, "loading"))
 
 # -- several documents per column -------------------------------------------------
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import html
 import logging
+import sys
 from typing import Any
 
 import panel as pn
@@ -390,7 +391,14 @@ def example_switcher(state: PlaygroundState, busy: dict[str, Any] | None = None)
             finally:
                 target.loading = False
 
-        doc.add_timeout_callback(work, 50)
+        if sys.platform == "emscripten":
+            # Under Pyodide a bokeh timeout callback applies the state changes but its
+            # loading flip never reaches the DOM; a change made from the asyncio loop does.
+            import asyncio
+
+            asyncio.get_event_loop().call_later(0.1, work)
+        else:
+            doc.add_timeout_callback(work, 50)
 
     def refresh(*_events: Any) -> None:
         wanted = active_example(state) or ""
@@ -532,104 +540,6 @@ def bind_url(state: PlaygroundState) -> None:
         pn.state.onload(persist)
 
 
-def _spin_until_ready(main: pn.Column, hidden: pn.viewable.Viewable, in_session: bool | None = None) -> Any:
-    """Overlay a loading spinner on the main area until the editors exist in the browser.
-
-    The page's own load event fires long before Monaco does (the editor bundle is large), so
-    readiness is counted from each visible editor's ``ready`` flag. Editors inside ``hidden``
-    (the collapsed paste panel) do not render until shown and are not waited for. A fallback
-    timeout clears the spinner regardless: a stuck overlay is worse than a page still
-    settling.
-    """
-    from panelini.panels.monacoeditor import MonacoEditor
-
-    if in_session is None:
-        in_session = pn.state.curdoc is not None
-    hidden_editors = {id(editor) for editor in hidden.select(MonacoEditor)}
-    editors = [
-        editor
-        for editor in main.select(MonacoEditor)
-        if id(editor) not in hidden_editors and not editor.ready
-    ]
-    if not editors:
-        return lambda: None
-    main.loading = True
-    pending = {id(editor) for editor in editors}
-    doc = pn.state.curdoc
-    timer_box: dict[str, Any] = {}
-    # Both must hold before the overlay may clear. The editors often report ready while the
-    # session is still initialising, and a property change made in that window never reaches
-    # the browser (verified: the server ends at css_classes=["main-object"] while the client
-    # keeps the loading classes forever) - whereas any change after the session's load event
-    # propagates reliably. So the flip waits for whichever comes last.
-    gates = {"loaded": not in_session, "finished": False}
-
-    def flip() -> None:
-        main.loading = False
-
-    def try_clear() -> None:
-        if not (gates["loaded"] and gates["finished"]):
-            return
-        timer = timer_box.pop("timer", None)
-        if timer is not None:
-            timer.cancel()
-        if doc is not None:
-            # When scheduling fails the session is already gone; there is no overlay left to
-            # clear, and flipping the property from this thread would race the document lock.
-            with contextlib.suppress(Exception):
-                doc.add_next_tick_callback(flip)
-            return
-        flip()
-
-    def done(*_events: Any) -> None:
-        gates["finished"] = True
-        try_clear()
-
-    def session_loaded() -> None:
-        gates["loaded"] = True
-        try_clear()
-
-    def on_ready(event: Any) -> None:
-        pending.discard(id(event.obj))
-        if not pending:
-            done()
-
-    for editor in editors:
-        editor.param.watch(on_ready, "ready")
-
-    if in_session:
-        # Registered only with a real document: without one panel runs the callback
-        # immediately, which would open the gate before anything is served (and makes the
-        # gate untestable).
-        if doc is not None:
-            pn.state.onload(session_loaded)
-        # The safety net: readiness normally clears the overlay, but when the editor module
-        # cannot load at all (a blocked or unreachable bundle CDN), no editor ever reports
-        # and only this timer stands between the user and a spinner that never leaves. A
-        # plain thread timer rather than a document timeout, so it fires even when the
-        # session never becomes responsive; next_tick from a thread is the documented safe
-        # entry point. Cancelled by try_clear on a normal boot.
-        import threading
-
-        def give_up() -> None:
-            # A session whose editors never load may also never fire its load event (bokeh
-            # only reports idle once the modules settle), so the timer opens both gates: by
-            # now the initialisation race the loaded-gate protects against is long over.
-            gates["loaded"] = True
-            done()
-
-        try:
-            timer = threading.Timer(30.0, give_up)
-            timer.daemon = True
-            timer.start()
-            timer_box["timer"] = timer
-        except Exception:  # pragma: no cover - no threads (browser build)
-            pass
-    else:
-        done()
-    return session_loaded
-
-
 def about_panel() -> pn.viewable.Viewable:
     """What the app is and how to read it, behind the sidebar toggle."""
     return pn.pane.Markdown(
@@ -657,8 +567,8 @@ def build(state: PlaygroundState | None = None) -> Any:
     log_card, _handler = log_panel()
     deferred = state is None and pn.state.curdoc is not None
     if state is None:
-        # The first recompute runs after the page is delivered (see _spin_until_ready), so
-        # the user sees the app shell and a spinner instead of seconds of blank page.
+        # The first recompute runs after the page is delivered: the pipeline costs seconds,
+        # and paying them before the document exists means seconds of blank page.
         state = PlaygroundState(compute=not deferred)
     bind_url(state)
     if deferred:
@@ -769,7 +679,6 @@ def build(state: PlaygroundState | None = None) -> Any:
         log_card,
         sizing_mode="stretch_width",
     )
-    _spin_until_ready(main, paste_body)
 
     try:
         from panelini import Panelini
