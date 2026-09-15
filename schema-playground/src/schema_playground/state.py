@@ -96,10 +96,60 @@ def meta_schema() -> dict[str, Any] | None:
 
         root = resources.files("oold.validation") / "meta"
         latest = sorted(entry.name for entry in root.iterdir() if entry.is_dir())[-1]
-        return json.loads((root / latest / "oold-meta-schema-base.json").read_text(encoding="utf-8"))
+        base = json.loads((root / latest / "oold-meta-schema-base.json").read_text(encoding="utf-8"))
+        return with_explicit_recursion(base)
     except Exception as exc:
         logger.warning("no meta-schema for editor validation: %s", exc)
         return None
+
+
+#: Where a subschema sits inside its parent, per the 2020-12 applicator vocabulary.
+_SUBSCHEMA_MAPS = ("properties", "$defs", "definitions", "patternProperties")
+_SUBSCHEMA_VALUES = ("items", "additionalProperties", "contains", "propertyNames", "not")
+_SUBSCHEMA_LISTS = ("allOf", "anyOf", "oneOf", "prefixItems")
+
+
+def with_explicit_recursion(base: dict[str, Any]) -> dict[str, Any]:
+    """The dialect with its recursion into subschemas spelled out as ``$ref``.
+
+    2020-12 reaches a nested subschema through the core applicator's ``$dynamicRef``, which
+    resolves back to the dialect because the base carries ``$dynamicAnchor: "meta"``. Monaco's
+    JSON language service implements ``$ref`` but not ``$dynamicRef``, so it offers the
+    ``x-oold-*`` keywords at the document root and nowhere else - and ``x-oold-range``, the
+    one that constrains what an IRI-valued property points at, is only ever written inside a
+    property. The YAML service does implement it, which is why the same document completes
+    there and not here.
+
+    Naming each subschema position with a plain ``$ref`` back to the dialect says the same
+    thing in the subset Monaco understands. A self-referential ``$ref`` is ordinary: the
+    2020-12 meta-schema is recursive in exactly this way.
+    """
+    identifier = base.get("$id")
+    if not isinstance(identifier, str) or not identifier:
+        return base
+
+    schema = dict(base)
+    properties = dict(schema.get("properties") or {})
+    self_ref = {"$ref": identifier}
+
+    for keyword in _SUBSCHEMA_MAPS:
+        entry = dict(properties.get(keyword) or {})
+        entry.setdefault("type", "object")
+        entry["additionalProperties"] = self_ref
+        properties[keyword] = entry
+
+    for keyword in _SUBSCHEMA_VALUES:
+        if keyword not in properties:
+            properties[keyword] = self_ref
+
+    for keyword in _SUBSCHEMA_LISTS:
+        entry = dict(properties.get(keyword) or {})
+        entry.setdefault("type", "array")
+        entry["items"] = self_ref
+        properties[keyword] = entry
+
+    schema["properties"] = properties
+    return schema
 
 
 def meta_store() -> dict[str, Any]:
@@ -128,7 +178,11 @@ def meta_store() -> dict[str, Any]:
         root = resources.files("oold.validation") / "meta"
         versions = sorted(entry.name for entry in root.iterdir() if entry.is_dir())
         latest = versions[-1]
-        base = json.loads((root / latest / "oold-meta-schema-base.json").read_text(encoding="utf-8"))
+        # The same rewrite the editor's own schema gets: a $ref landing on the raw base would
+        # stop recursing after one level, so only a first-level property would complete.
+        base = with_explicit_recursion(
+            json.loads((root / latest / "oold-meta-schema-base.json").read_text(encoding="utf-8"))
+        )
         ui = json.loads((root / latest / "oold-ui-meta-schema.json").read_text(encoding="utf-8"))
         for version in ("latest", "dev", latest):
             store[f"https://oo-ld.org/{version}/meta/oold-meta-schema.json"] = base
