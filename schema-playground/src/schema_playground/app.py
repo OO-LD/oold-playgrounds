@@ -1,10 +1,10 @@
 """The playground, assembled.
 
 Four columns sit in panelini's main frame, with the paste field between the two halves.
-Expanding the paste field collapses the source columns, because it takes over their job: it
-supplies the RDF the right-hand side reads. That is the only way the bus changes owner, which
-is what keeps the data flow one-directional and free of the loop a bidirectional wiring would
-create.
+Expanding the paste field takes over the source columns' job: it supplies the RDF the
+right-hand side reads, and their editors go read-only while it does. That is the only way the
+bus changes owner, which is what keeps the data flow one-directional and free of the loop a
+bidirectional wiring would create.
 """
 
 from __future__ import annotations
@@ -42,7 +42,6 @@ from schema_playground.transform import JSON_LD, TURTLE
 logger = logging.getLogger(__name__)
 
 TITLE = "OO-LD Schema Playground"
-SOURCE_PANES = ("Source schemas", "Source instances")
 ALL_PANES = ("Source schemas", "Source instances", "Target schemas", "Transformed instances")
 
 #: The state fields that make up a shareable session, taken from the config model so the two
@@ -122,18 +121,9 @@ def paste_panel(state: PlaygroundState, split: SplitColumns) -> tuple[pn.Row, pn
         # reads as a status gives no hint that it is the way back.
         toggle.name = "Back to schema input" if active else "Paste RDF instead"
         body.visible = active
-        # The source columns no longer feed anything, so they fold away to give the pasted
-        # graph and its readings the width. Expressed through collapsed_panes rather than by
-        # driving the split directly: the collapse state has exactly one owner, so this
-        # cannot clobber a collapse list an example or a URL is applying at the same moment.
-        wanted = [
-            title
-            for title in ALL_PANES
-            if (title in SOURCE_PANES and active)
-            or (title not in SOURCE_PANES and title in (state.collapsed_panes or []))
-        ]
-        if wanted != list(state.collapsed_panes or []):
-            state.collapsed_panes = wanted
+        # The source columns stay on screen in paste mode. They no longer feed anything, so
+        # their editors go read-only (see DocumentEditor.lock_on_paste), but folding them away
+        # would remove the thing the pasted graph is being compared against.
 
     def on_toggle(event: Any) -> None:
         wanted = bool(event.new)
@@ -523,6 +513,13 @@ def bind_url(state: PlaygroundState) -> None:
     if manager.has_config():
         apply_config(state, manager.get_config())
         logger.info("session restored from the URL")
+    elif active_example(state) == "Transform":
+        # One schema and one instance is the smaller thing to take in; the transform is a
+        # second idea on top of it. Only an untouched session is reseeded - a caller that
+        # built the state with its own documents (tests, an embedder) means them, and
+        # EXAMPLES["Transform"] is exactly the bare config, so matching it means untouched.
+        apply_config(state, cfg.EXAMPLES["Simple"])
+        logger.info("session seeded with the Simple example")
 
     def persist(*_events: Any) -> None:
         try:
@@ -588,6 +585,7 @@ def build(state: PlaygroundState | None = None) -> Any:
                     lambda: _chain_of(state, "source_schema"),
                     meta=meta,
                     store=store,
+                    lock_on_paste=True,
                 ),
                 sizing_mode="stretch_width",
             ),
@@ -606,6 +604,7 @@ def build(state: PlaygroundState | None = None) -> Any:
                     "source_instance_error",
                     controls=rdf_controls(state),
                     schema_field="source_editor_schema",
+                    lock_on_paste=True,
                 ),
                 sizing_mode="stretch_width",
             ),

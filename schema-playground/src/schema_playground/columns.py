@@ -64,6 +64,7 @@ class DocumentEditor(pn.viewable.Viewer):
         schema_field: str | None = None,
         json_schema: dict | None = None,
         extra_store: dict | None = None,
+        lock_on_paste: bool = False,
     ) -> None:
         super().__init__()
         self._state = state
@@ -92,6 +93,18 @@ class DocumentEditor(pn.viewable.Viewer):
         )
         if not readonly:
             self._editor.param.watch(self._on_edit, "value")
+
+        # In paste mode the pasted graph is the input, so these documents no longer feed
+        # anything. They stay on screen - reading them is still the point of comparing the
+        # two sides - but editing them would suggest an effect they do not have.
+        if lock_on_paste and hasattr(state, "use_paste"):
+
+            def _follow_paste(*_events: Any) -> None:
+                self._editor.read_only = readonly or bool(state.use_paste)
+
+            _follow_paste()
+            state.param.watch(_follow_paste, "use_paste")
+
         state.param.watch(self._on_state, field)
         if schema_field is not None:
             state.param.watch(self._on_schema, schema_field)
@@ -236,6 +249,7 @@ def schema_column(
     chain_of: Callable[[], list],
     meta: dict | None = None,
     store: dict | None = None,
+    lock_on_paste: bool = False,
 ) -> pn.Column:
     """A schema column: the document in two encodings, plus its reading as terms.
 
@@ -247,8 +261,8 @@ def schema_column(
     )
     return pn.Column(
         _tabs(
-            ("JSON", DocumentEditor(state, field, "json", json_schema=meta, extra_store=store)),
-            ("YAML", DocumentEditor(state, field, "yaml", json_schema=meta, extra_store=store)),
+            ("JSON", DocumentEditor(state, field, "json", json_schema=meta, extra_store=store, lock_on_paste=lock_on_paste)),
+            ("YAML", DocumentEditor(state, field, "yaml", json_schema=meta, extra_store=store, lock_on_paste=lock_on_paste)),
             ("Terms", pn.Column(terms, scroll=True, height=EDITOR_HEIGHT)),
         ),
         error_pane(state, error_field),
@@ -293,6 +307,7 @@ def instance_column(
     readonly: bool = False,
     controls: pn.viewable.Viewable | None = None,
     schema_field: str | None = None,
+    lock_on_paste: bool = False,
 ) -> pn.Column:
     """An instance column: the document, the RDF it exports as, and that graph drawn.
 
@@ -320,8 +335,8 @@ def instance_column(
     rdf_tab: Any = rdf_view if controls is None else pn.Column(controls, rdf_view, sizing_mode="stretch_width")
 
     panels = [
-        ("JSON", DocumentEditor(state, instance_field, "json", readonly=readonly, schema_field=schema_field)),
-        ("YAML", DocumentEditor(state, instance_field, "yaml", readonly=readonly, schema_field=schema_field)),
+        ("JSON", DocumentEditor(state, instance_field, "json", readonly=readonly, schema_field=schema_field, lock_on_paste=lock_on_paste)),
+        ("YAML", DocumentEditor(state, instance_field, "yaml", readonly=readonly, schema_field=schema_field, lock_on_paste=lock_on_paste)),
         ("RDF", rdf_tab),
         ("Graph", graph_pane(state, graph_field)),
     ]
