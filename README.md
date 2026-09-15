@@ -1,7 +1,7 @@
 # oold playgrounds
 
-Browser playgrounds demonstrating the [`oold`](https://github.com/OO-LD/oold-python)
-package. All run fully client side and are deployable as static sites
+Browser playgrounds for the [`oold`](https://github.com/OO-LD/oold-python) and
+[`awl`](https://github.com/OO-LD/awl-python) packages. All run fully client side and are deployable as static sites
 (`schema-playground` also runs as an ordinary Panel server).
 
 | Directory | What it is | Answers |
@@ -9,6 +9,7 @@ package. All run fully client side and are deployable as static sites
 | `ty-playground/` | Monaco + `ty_wasm` + Pyodide, forked from Astral's ty playground | static type checking, completion and hover over injected `oold` sources |
 | `jupyterlite/` | JupyterLite with a Pyodide kernel | completion over **live objects**, including classes generated at runtime |
 | `schema-playground/` | Panel + panelini app on the released `oold` validator | what a schema *means*: mapping-set selection, RDF export, and instance transformation between two schemas |
+| `awl-playground/` | Panel + React Flow + Monaco on [`awl`](https://github.com/OO-LD/awl-python) | a Python procedure as blocks, as source and as a traced run, all three live at once |
 
 The completion playgrounds are complementary rather than competing. A static checker analyses
 source and cannot see a class created by `exec()` or `create_model()`;
@@ -18,9 +19,10 @@ deployment because `jupyter_lsp` needs a subprocess and a websocket route.
 
 ## Prerequisites
 
-`ty-playground` and `jupyterlite` build a wheel from a local `oold-python` checkout rather than PyPI, because
-the demos track an unreleased branch. The checkout is found by searching upward
-for a sibling `oold-python/`; override with `OOLD_SRC`.
+`ty-playground` and `jupyterlite` build a wheel from a local `oold-python` checkout rather than PyPI,
+following its `main` branch. The checkout is found by searching upward for a
+sibling `oold-python/`; override with `OOLD_SRC`. `awl-playground` does the same
+against `awl-python`, overridden with `AWL_SRC`.
 
 `ty-playground` additionally needs Docker to build `ty_wasm`, and `jupyterlite`
 needs a Python environment in `.venv`. Neither is rebuilt on a normal run.
@@ -36,8 +38,11 @@ needs a Python environment in `.venv`. Neither is rebuilt on a normal run.
 
     cd schema-playground && uv sync && uv run panel serve app.py --dev    # http://localhost:5006/app
 
-Use a Chromium based browser. Firefox does not implement JSPI, which the Pyodide
-kernel needs, and fails with `WebAssembly stack switching not supported`.
+    cd awl-playground    && uv sync && uv run panel serve app.py --dev    # http://localhost:5006/app
+
+Chromium and Firefox both work. Firefox shipped JSPI, which the Pyodide kernel
+needs, so the `WebAssembly stack switching not supported` failure this used to
+warn about no longer happens.
 
 ## Test
 
