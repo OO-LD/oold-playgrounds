@@ -7,7 +7,7 @@ on:
     inputs:
       oold_ref:
         description: oold-python ref to build the wheel from
-        default: experiment/graph-object-binding-107
+        default: main
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  OOLD_REF: ${{ inputs.oold_ref || 'experiment/graph-object-binding-107' }}
+  OOLD_REF: ${{ inputs.oold_ref || 'main' }}
   # ty has no releases; pin the ruff commit so diagnostics do not move under us
   RUFF_REF: 2c3fa3e32f31cbb594f289e3a3e1bdc40de33262
 
