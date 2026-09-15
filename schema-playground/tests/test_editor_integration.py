@@ -209,3 +209,71 @@ def test_completion_offers_the_missing_properties(page):
         }"""
     )
     assert contrast > 150, f"suggest row text unreadable (contrast {contrast})"
+
+
+def test_schema_completion_offers_the_dialect_keywords(page):
+    """The schema editor completes from the OO-LD meta-schema, not just from words on screen.
+
+    Monaco always offers word-based suggestions, so "some suggestions appeared" proves
+    nothing: a broken schema association looks identical to a working one until you check
+    that a keyword no buffer contains is among them. ``x-oold-prior-version`` is in the
+    dialect and in none of the shipped documents, so only the meta-schema can supply it.
+
+    Runs last: it types into the source schema buffer and leaves it that way.
+    """
+    page.get_by_text("JSON", exact=True).nth(0).click()
+    page.wait_for_timeout(2_000)
+
+    editor = _editor_with(page, '"$id": "Person.schema.json"')
+    editor.locator(".view-lines").click()
+    page.keyboard.press("Control+Home")
+    page.keyboard.press("End")
+    page.keyboard.press("Enter")
+    page.keyboard.type('"x-')
+    page.wait_for_timeout(3_000)
+
+    labels = _suggest_labels(page)
+    page.keyboard.press("Escape")
+    assert labels, "no suggestions at all"
+    dialect = [label for label in labels if "x-oold" in label]
+    assert dialect, f"no dialect keywords offered, only: {labels[:20]}"
+    assert any("x-oold-prior-version" in label for label in dialect), dialect
+
+
+def test_schema_completion_offers_dialect_keywords_inside_a_property(page):
+    """The dialect applies to every subschema, so a property must complete like the root.
+
+    ``x-oold-range`` is the property-level keyword - it constrains what an IRI-valued
+    property points at - so a completion list that has it at the root and not here is the
+    wrong way round. 2020-12 recurses into ``properties/*`` through the core applicator's
+    ``$dynamicRef``, which resolves back to the dialect because the base carries
+    ``$dynamicAnchor: "meta"``.
+
+    Runs last: it types into the source schema buffer and leaves it that way.
+    """
+    page.get_by_text("JSON", exact=True).nth(0).click()
+    page.wait_for_timeout(2_000)
+
+    editor = _editor_with(page, '"$id": "Person.schema.json"')
+    editor.locator(".view-lines").click()
+    # Monaco renders only the lines in view, so the target is reached through find rather
+    # than by clicking it or counting Down presses; both break as the document grows.
+    page.keyboard.press("Control+Home")
+    page.keyboard.press("Control+f")
+    page.wait_for_timeout(500)
+    page.keyboard.type('"format": "iri"')
+    page.wait_for_timeout(500)
+    page.keyboard.press("Enter")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(500)
+    page.keyboard.press("End")
+    page.keyboard.press("Enter")
+    page.keyboard.type('"x-')
+    page.wait_for_timeout(3_000)
+
+    labels = _suggest_labels(page)
+    page.keyboard.press("Escape")
+    assert labels, "no suggestions at all inside the property"
+    assert any("x-oold-range" in label for label in labels), (
+        f"the dialect does not reach a nested subschema, only: {labels[:20]}"
+    )
