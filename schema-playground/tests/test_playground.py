@@ -611,10 +611,12 @@ def test_active_example_tracks_the_session():
 
 def test_the_paste_toggle_mirrors_the_state():
     """The paste mode is state-owned: examples and URL restores change it without a click,
-    and the toggle, the editor panel and the folded source columns must all follow."""
+    and the toggle and the editor panel must both follow. The source columns stay put: their
+    editors go read-only instead, so what the pasted graph is compared against stays on
+    screen."""
     import panel as _pn
 
-    from schema_playground.app import ALL_PANES, SOURCE_PANES, apply_example, paste_panel, sync_collapse
+    from schema_playground.app import ALL_PANES, apply_example, paste_panel, sync_collapse
     from schema_playground.split import Pane, SplitColumns
 
     state = PlaygroundState()
@@ -623,18 +625,21 @@ def test_the_paste_toggle_mirrors_the_state():
     toolbar, body = paste_panel(state, split)
     toggle = toolbar.objects[0]
 
+    sources = ("Source schemas", "Source instances")
+
     state.use_paste = True
     assert toggle.value is True
     assert toggle.button_type == "primary"
     assert body.visible is True
-    assert set(SOURCE_PANES) <= set(split.collapsed_titles())
+    assert not set(sources) & set(split.collapsed_titles())
 
     apply_example(state, "Simple")
     assert state.use_paste is False
     assert toggle.value is False
     assert toggle.button_type == "default"
     assert body.visible is False
-    assert not set(SOURCE_PANES) & set(split.collapsed_titles())
+    # Simple folds the right-hand side; the source columns are never folded by paste mode.
+    assert not set(sources) & set(split.collapsed_titles())
 
 
 def test_an_example_collapse_survives_leaving_paste_mode():
@@ -717,3 +722,33 @@ def test_a_document_mid_edit_keeps_its_selector_label():
 
     state.source_instance = '{"broken'
     assert list(select.options) == ["jane"], "a document mid-edit keeps its last good name"
+
+
+def test_bind_url_seeds_the_simple_example_only_when_nothing_else_asked(location):
+    """A URL config outranks the default example, and so does an explicitly built session.
+
+    Seeding a fresh visitor with the smaller example must not become a way to lose the
+    session a shared link carries, nor the documents an embedder constructed.
+    """
+    from schema_playground.app import active_example, bind_url
+
+    # 1. nothing in the URL, untouched session -> the Simple example
+    fresh = PlaygroundState()
+    assert active_example(fresh) == "Transform", "the bare config is the Transform example"
+    bind_url(fresh)
+    assert active_example(fresh) == "Simple"
+
+    # 2. a session restored from the URL wins
+    shared = cfg.PlaygroundConfig(source_instances=['{"name": "Janet"}'], mapping_set="s:1")
+    uc.UrlConfig(cfg.PlaygroundConfig, param_name="pg").set_config(shared)
+    restored = PlaygroundState()
+    bind_url(restored)
+    assert restored.source_instances == ['{"name": "Janet"}']
+    assert restored.mapping_set == "s:1"
+    assert active_example(restored) is None, "a shared session is nobody's example"
+
+    # 3. a state built with its own documents is left alone
+    location.search = ""
+    built = PlaygroundState(source_instances=['{"name": "Joe"}'])
+    bind_url(built)
+    assert built.source_instances == ['{"name": "Joe"}']

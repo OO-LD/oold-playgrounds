@@ -37,6 +37,9 @@ const INJECT_PACKAGES = [
 
 const PROBE_MODULES = ["rdflib", "pyld", "SPARQLWrapper", "jsondiff", "oold"];
 
+/** Values fetched from a backend are the point of the demo, so show them up front. */
+const OVERLAY_DEFAULT = true;
+
 type Status = "booting" | "ty-ready" | "installing" | "ready" | "error";
 
 export type InjectionStats = {
@@ -106,7 +109,7 @@ export default function Playground() {
     { ok: boolean; detail: string }
   > | null>(null);
   const [tyVersion, setTyVersion] = useState("");
-  const [overlayEnabled, setOverlayEnabledState] = useState(false);
+  const [overlayEnabled, setOverlayEnabledState] = useState(OVERLAY_DEFAULT);
   const [linkEvents, setLinkEvents] = useState<LinkResolutionEvent[]>([]);
   const [backendCalls, setBackendCalls] = useState<OverlayDrain["backendCalls"]>([]);
 
@@ -188,6 +191,12 @@ export default function Playground() {
         };
         setInjection(stats);
         timings.current.injected = performance.now();
+
+        // The overlay is on by default, so install the hooks before the first
+        // run rather than waiting for the toggle to be touched.
+        if (OVERLAY_DEFAULT) {
+          await setOverlayEnabled(runtime.pyodide, true);
+        }
 
         setStatus("ready");
         setProgress("ready");
