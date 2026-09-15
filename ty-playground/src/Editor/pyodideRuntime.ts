@@ -17,7 +17,19 @@ export const PYODIDE_INDEX_URL = import.meta.env.DEV
   ? asset("pyodide/")
   : `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 
-export const OOLD_WHEEL_URL = asset("wheels/oold-0.16.5-py3-none-any.whl");
+/** Written by scripts/build-wheel.mjs; the wheel filename carries a version that moves. */
+export const OOLD_WHEEL_MANIFEST_URL = asset("wheels/manifest.json");
+
+async function oldWheelUrl(): Promise<string> {
+  const response = await fetch(OOLD_WHEEL_MANIFEST_URL);
+  if (!response.ok) {
+    throw new Error(
+      `failed to fetch ${OOLD_WHEEL_MANIFEST_URL}: ${response.status}; run npm run wheel`,
+    );
+  }
+  const { wheel } = (await response.json()) as { wheel: string };
+  return asset(`wheels/${wheel}`);
+}
 
 export type ProgressFn = (message: string) => void;
 
@@ -86,14 +98,13 @@ export async function bootPyodide(
   await pyodide.runPythonAsync(INIT_CODE);
 
   progress("installing oold wheel");
-  const wheelResponse = await fetch(OOLD_WHEEL_URL);
+  const wheelUrl = await oldWheelUrl();
+  const wheelResponse = await fetch(wheelUrl);
   if (!wheelResponse.ok) {
-    throw new Error(
-      `failed to fetch ${OOLD_WHEEL_URL}: ${wheelResponse.status}`,
-    );
+    throw new Error(`failed to fetch ${wheelUrl}: ${wheelResponse.status}`);
   }
   const wheelBytes = new Uint8Array(await wheelResponse.arrayBuffer());
-  const wheelName = OOLD_WHEEL_URL.split("/").pop() as string;
+  const wheelName = wheelUrl.split("/").pop() as string;
   pyodide.FS.mkdirTree("/wheels");
   pyodide.FS.writeFile(`/wheels/${wheelName}`, wheelBytes);
 

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,5 +33,14 @@ execFileSync("uv", ["build", "--wheel", "--out-dir", out], {
   cwd: source,
   stdio: "inherit",
 });
+
+// The filename carries the version, which micropip parses, so it cannot be normalised
+// away. A manifest keeps the runtime from hardcoding a version it would have to chase
+// on every release.
+const wheel = readdirSync(out).find((name) => name.endsWith(".whl"));
+if (!wheel) {
+  throw new Error(`no wheel produced in ${out}`);
+}
+writeFileSync(join(out, "manifest.json"), JSON.stringify({ wheel }, null, 2) + "\n");
 
 console.log("built", readdirSync(out).join(", "));
