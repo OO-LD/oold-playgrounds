@@ -1,5 +1,9 @@
 # AWL-LD playground
 
+> **Highly experimental.** The editor is one of five competing variants and the
+> one judged best so far; its shape is still being argued about, and both the
+> canvas and the write-back rules change between rounds.
+
 One Python procedure, edited three ways at once: as blocks on a canvas, as
 source in an editor, and as a run you can watch.
 

@@ -9,7 +9,7 @@ Browser playgrounds for the [`oold`](https://github.com/OO-LD/oold-python) and
 | `ty-playground/` | Monaco + `ty_wasm` + Pyodide, forked from Astral's ty playground | static type checking, completion and hover over injected `oold` sources |
 | `jupyterlite/` | JupyterLite with a Pyodide kernel | completion over **live objects**, including classes generated at runtime |
 | `schema-playground/` | Panel + panelini app on the released `oold` validator | what a schema *means*: mapping-set selection, RDF export, and instance transformation between two schemas |
-| `awl-playground/` | Panel + React Flow + Monaco on [`awl`](https://github.com/OO-LD/awl-python) | a Python procedure as blocks, as source and as a traced run, all three live at once |
+| `awl-playground/` | Panel + React Flow + Monaco on [`awl`](https://github.com/OO-LD/awl-python). **Highly experimental** | a Python procedure as blocks, as source and as a traced run, all three live at once |
 
 The completion playgrounds are complementary rather than competing. A static checker analyses
 source and cannot see a class created by `exec()` or `create_model()`;

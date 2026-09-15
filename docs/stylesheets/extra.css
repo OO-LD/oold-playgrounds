@@ -3,8 +3,16 @@
 .playground-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  /* Two by two. `auto-fit` laid four cards in one row on a wide screen and each
+     one then held four bullet points in a column three words wide. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 1.5rem 0 2rem;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .playground-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .playground-card {
@@ -48,6 +56,28 @@
   display: block;
   margin: 0 0 0.6rem;
   font-weight: 600;
+}
+
+/* Said on the card, not in the prose below it: whoever clicks through without
+   reading the page is exactly who needs to know. */
+.md-typeset a.playground-card .playground-card__flag {
+  display: inline-block;
+  margin: 0 0 0.6rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid #fcd34d;
+  border-radius: 3px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+[data-md-color-scheme="slate"] .md-typeset a.playground-card .playground-card__flag {
+  border-color: #b45309;
+  background: rgba(180, 83, 9, 0.22);
+  color: #fcd34d;
 }
 
 .md-typeset a.playground-card ul,
