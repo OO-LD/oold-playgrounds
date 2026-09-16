@@ -2,12 +2,17 @@
 name = "awl-playground"
 description = "Interactive AWL-LD playground: edit a procedure as blocks, as source, and run it"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
-    # From a sibling awl-python checkout rather than PyPI: the editor variants
-    # track an unreleased branch. scripts/build_wasm.py builds the wheel.
+    # From a sibling awl-python checkout rather than PyPI: the editor tracks an
+    # unreleased branch. scripts/build_wasm.py builds the wheel.
     "awl",
+    # The canvas the editor draws on. It reaches awl through the `editor` extra,
+    # and an extra does not travel with a bare dependency, so it is named here
+    # too: without it `panel convert` prerenders an app that raises
+    # ModuleNotFoundError and still exits 0.
+    "panel-reactflow>=0.4.1",
     "panel>=1.5",
     "param>=2",
 ]

@@ -8,6 +8,9 @@ on:
       oold_ref:
         description: oold-python ref to build the wheel from
         default: main
+      awl_ref:
+        description: awl-python ref to build the wheel from
+        default: feat/phase2-modules
 
 permissions:
   contents: read
@@ -20,6 +23,9 @@ concurrency:
 
 env:
   OOLD_REF: ${{ inputs.oold_ref || 'main' }}
+  # The editor is not on awl-python's main yet, so the playground tracks the
+  # branch it lives on. Move this to main when it lands there.
+  AWL_REF: ${{ inputs.awl_ref || 'feat/phase2-modules' }}
   # ty has no releases; pin the ruff commit so diagnostics do not move under us
   RUFF_REF: 2c3fa3e32f31cbb594f289e3a3e1bdc40de33262
 
@@ -38,6 +44,14 @@ jobs:
           repository: OO-LD/oold-python
           ref: ${{ env.OOLD_REF }}
           path: oold-python
+
+      # The editor the awl playground deploys, built from source for the same
+      # reason: it is ahead of what is released.
+      - uses: actions/checkout@v4
+        with:
+          repository: OO-LD/awl-python
+          ref: ${{ env.AWL_REF }}
+          path: awl-python
 
       - uses: actions/setup-node@v4
         with:
@@ -81,6 +95,10 @@ jobs:
         env:
           PY: ${{ github.workspace }}/playgrounds/.venv/bin/python
           OOLD_SRC: ${{ github.workspace }}/oold-python
+          AWL_SRC: ${{ github.workspace }}/awl-python
+          # Built once above and cached; the awl playground copies it beside its
+          # own page rather than building a second time.
+          AWL_TY_WASM: ${{ github.workspace }}/playgrounds/ty-playground/ty_wasm
         run: bash scripts/build-site.sh
 
       - uses: actions/upload-pages-artifact@v3

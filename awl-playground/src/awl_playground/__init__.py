@@ -1,10 +1,11 @@
 """The AWL-LD playground: a procedure as blocks, as source, and run.
 
-The canvas still lives in ``awl.ui.panel_reactflow`` and is re-exported here.
-It moves into this package once the branch it is being built on settles; until
-then it is imported rather than copied, because two copies of an editor is how
-a variant ends up measuring its own reimplementation rather than the model
-every variant is supposed to share.
+Only the deployment lives here. The editor is ``awl.ui.panel_reactflow`` and
+stays in ``awl-python`` beside the model it is built on, because a copy of an
+editor is how one ends up measuring its own reimplementation rather than the
+model. What this package adds is what a browser build needs and a library
+should not carry: an entry point, the wheel set, and the patches that make
+``panel convert`` produce something that boots.
 """
 
 from __future__ import annotations

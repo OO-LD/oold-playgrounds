@@ -42,7 +42,9 @@ def main() -> int:
         # canvas only carries blocks once the sample was parsed and its plan built, all
         # inside the browser. Located rather than read off ``document.body.innerText``:
         # Panel renders into shadow roots, which that text does not reach, so the page
-        # looks empty while showing an app.
+        # looks empty while showing an app. Playwright's selector engine does
+        # cross an open shadow root, which is why every count below goes
+        # through a locator.
         deadline = args.timeout * 1000
         ready = False
         found: list[str] = []
@@ -64,17 +66,16 @@ def main() -> int:
                     break
                 page.wait_for_timeout(1000)
 
-        # Exactly one live document: the prerendered one must be disposed on takeover, or a
-        # second copy of every model stays alive and Bokeh.documents[0] is a dead decoy.
-        single_document = False
+        # Counted through Playwright, not through `document.querySelectorAll`.
+        # Panel renders into shadow roots, which that call does not cross: it
+        # returned 0 against a fully working app while the locator found all
+        # eleven, so the check failed hardest when the page was healthiest.
         blocks = 0
+        editable = 0
         if ready:
             page.wait_for_timeout(2000)
-            state = page.evaluate(
-                "() => ({docs: Bokeh.documents.length, blocks: document.querySelectorAll('.awl-block').length})"
-            )
-            single_document = state["docs"] == 1
-            blocks = int(state["blocks"])
+            blocks = page.locator(".awl-block").count()
+            editable = page.locator("[data-edit]").count()
 
         page.wait_for_timeout(3000)
         page.screenshot(path=args.shot, full_page=False)
@@ -83,8 +84,8 @@ def main() -> int:
 
     print(f"ready: {ready}")
     print(f"overlay cleared: {overlay_cleared}")
-    print(f"single document: {single_document}")
     print(f"blocks drawn: {blocks}")
+    print(f"editable blocks: {editable}")
     print(f"screenshot: {args.shot}")
     print("\n--- rendered ---")
     print(rendered)
@@ -106,7 +107,12 @@ def main() -> int:
 
     # A JavaScript error is reported but does not by itself fail the check: the app is judged
     # on whether it rendered and became usable, which is what a user would notice.
-    passed = ready and overlay_cleared and single_document and blocks > 0
+    #
+    # `editable` is what separates a live app from the prerendered corpse
+    # `panel convert` inlines into the page. That corpse satisfies a selector
+    # wait, so a check resting on those alone passed while Python had died in
+    # the worker, and the whole build was greenest when the app was deadest.
+    passed = ready and overlay_cleared and blocks > 0 and editable > 0
     print(f"\nRESULT: {'OK' if passed else 'FAIL'}")
     if errors and passed:
         print("(the app works; the JavaScript errors above did not stop it)")

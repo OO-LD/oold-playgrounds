@@ -29,12 +29,20 @@ APP = ROOT / "app.py"
 REQUIREMENTS = [
     "param",
     "panel",
+    # The canvas. Installed by name because it is a pure-Python wheel on PyPI,
+    # and required because the app imports it: without it the page boots, the
+    # worker raises ModuleNotFoundError and the console says only
+    # "Environment loaded!".
+    "panel-reactflow>=0.4.1",
     # The editor reads and rewrites source by span, which is what asttokens is for.
     "asttokens",
     "pyodide-http",
 ]
 
-#: Installed without their dependency lists. Local wheels are added by the patcher.
+#: Installed without their dependency lists. Local wheels are added by the
+#: patcher. ``awl`` is here because its declared dependencies cover the whole
+#: pipeline and the editor imports none of them: ``rdflib``, ``pyld`` and
+#: ``oold`` are reached only inside functions this app never calls.
 NO_DEPS: list[str] = []
 
 
@@ -59,7 +67,7 @@ def find_source() -> Path:
 
 def build_wheel(source: Path, pattern: str) -> str:
     """Build a wheel from *source* into the output directory and return its filename."""
-    subprocess.check_call(["uv", "build", "--wheel", "--out-dir", str(OUT)], cwd=source)  # noqa: S603,S607
+    subprocess.check_call(["uv", "build", "--wheel", "--out-dir", str(OUT)], cwd=source)
     wheels = sorted(OUT.glob(pattern), key=lambda path: path.stat().st_mtime)
     if not wheels:
         sys.exit(f"no wheel matching {pattern} in {OUT} after the build")
@@ -78,7 +86,9 @@ def patch_worker(worker: Path, wheel_names: list[str]) -> None:
         text = text.replace(listed, "", 1)
         # Addressed relative to the worker's own location, so the build is portable to
         # whatever path it is deployed under.
-        without_deps.append(f"'${{new URL(\"{wheel_name}\", self.location.href).href}}'")
+        without_deps.append(
+            f"'${{new URL(\"{wheel_name}\", self.location.href).href}}'"
+        )
 
     for name in NO_DEPS:
         if f"'{name}', " in text:
@@ -94,19 +104,29 @@ def patch_worker(worker: Path, wheel_names: list[str]) -> None:
         1,
     )
 
-    broken = re.search(r"'https://cdn\.holoviz\.org/panel/wheels/bokeh-([0-9][^']*)-py3-none-any\.whl'", text)
+    broken = re.search(
+        r"'https://cdn\.holoviz\.org/panel/wheels/bokeh-([0-9][^']*)-py3-none-any\.whl'",
+        text,
+    )
     if broken:
         text = text.replace(broken.group(0), f"'bokeh=={broken.group(1)}'", 1)
-        print(f"patched {worker.name}: bokeh {broken.group(1)} taken from PyPI, not the CDN")
+        print(
+            f"patched {worker.name}: bokeh {broken.group(1)} taken from PyPI, not the CDN"
+        )
 
     worker.write_text(text, encoding="utf-8")
-    print(f"patched {worker.name}: local wheels by URL, installed without their unused dependencies")
+    print(
+        f"patched {worker.name}: local wheels by URL, installed without their unused dependencies"
+    )
 
 
 def main() -> None:
     source = find_source()
     print(f"building the awl wheel from {source}")
-    wheel_names = [build_wheel(source, "awl-*.whl"), build_wheel(ROOT, "awl_playground-*.whl")]
+    wheel_names = [
+        build_wheel(source, "awl-*.whl"),
+        build_wheel(ROOT, "awl_playground-*.whl"),
+    ]
 
     command = [
         sys.executable,
@@ -123,12 +143,82 @@ def main() -> None:
         *REQUIREMENTS,
     ]
     print(" ".join(command))
-    code = subprocess.call(command)  # noqa: S603 - the command is built here, not supplied
+    code = subprocess.call(command)
     if code:
         raise SystemExit(code)
+    # `panel convert` prerenders the app by importing it, and reports an import
+    # failure as "does not publish any Panel contents" while exiting 0. Without
+    # this the script died twenty lines later on a missing app.js and named the
+    # wrong cause.
+    if not (OUT / f"{APP.stem}.js").exists():
+        sys.exit(
+            f"panel convert wrote no {APP.stem}.js; the app most likely failed to import"
+        )
 
     patch_worker(OUT / f"{APP.stem}.js", wheel_names)
+    copy_extension_assets()
+    copy_type_checker()
     print(f"Serve it with: python -m http.server --directory {OUT}")
+
+
+def copy_type_checker() -> None:
+    """Copy ty's WebAssembly next to the page, when a build of it is at hand.
+
+    The editor mounts it at ``/ty-wasm/`` and degrades to no type checking when
+    it is absent, which is the right failure: 17.8 MB is six times the rest of
+    the app and not every deployment wants to carry it. Taken from the sibling
+    ``ty-playground``, which is where it is built, rather than rebuilt here:
+    that needs Docker and a checkout of ruff.
+    """
+    import shutil
+
+    override = os.environ.get("AWL_TY_WASM")
+    source = (
+        Path(override).resolve()
+        if override
+        else (ROOT / ".." / "ty-playground" / "ty_wasm").resolve()
+    )
+    if not (source / "ty_wasm.js").exists():
+        print(
+            f"no ty_wasm at {source}; the pane will edit and highlight without type checking"
+        )
+        return
+    target = OUT / "ty-wasm"
+    target.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, target, dirs_exist_ok=True)
+    carried = sum(path.stat().st_size for path in target.rglob("*") if path.is_file())
+    print(f"copied ty into {target.relative_to(OUT)} ({carried / 1_000_000:.1f} MB)")
+
+
+def copy_extension_assets() -> None:
+    """Copy the canvas's stylesheets next to the page that asks for them.
+
+    ``panel convert`` writes ``<link>`` tags pointing at
+    ``static/extensions/<package>/`` and emits nothing there, because a Panel
+    *server* serves those from the installed package and a static build has no
+    server. Without this the page 404s on them and the canvas renders unstyled,
+    which reads as a broken layout rather than as a missing file.
+    """
+    import re
+    import shutil
+
+    page = (OUT / f"{APP.stem}.html").read_text(encoding="utf-8")
+    wanted = set(re.findall(r"static/extensions/([^/]+)/", page))
+    for package in sorted(wanted):
+        try:
+            source = (
+                Path(__import__(package.replace("-", "_")).__file__).parent / "dist"
+            )
+        except (ImportError, AttributeError, TypeError):
+            print(f"no installed package for {package}; its assets are not copied")
+            continue
+        if not source.is_dir():
+            print(f"{package} ships no dist/; its assets are not copied")
+            continue
+        target = OUT / "static" / "extensions" / package
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        print(f"copied {package} assets into {target.relative_to(OUT)}")
 
 
 if __name__ == "__main__":
