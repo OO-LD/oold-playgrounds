@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "oold-azure-providers"
+version = "0.1.0"
+description = "Azure OpenAI and Azure AI Foundry Anthropic providers for jupyterlite-ai"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.9"
+classifiers = [
+  "Framework :: Jupyter",
+  "Framework :: Jupyter :: JupyterLab",
+  "Framework :: Jupyter :: JupyterLab :: 4",
+  "Framework :: Jupyter :: JupyterLab :: Extensions",
+  "Framework :: Jupyter :: JupyterLab :: Extensions :: Prebuilt",
+]
+dependencies = ["jupyterlite-ai>=0.20.1,<0.21"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["oold_azure_providers"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"labextension" = "share/jupyter/labextensions/oold-azure-providers"
+"install.json" = "share/jupyter/labextensions/oold-azure-providers/install.json"
+
+[tool.hatch.build.targets.sdist]
+include = ["oold_azure_providers", "labextension", "install.json", "src", "schema", "package.json", "tsconfig.json", "README.md"]

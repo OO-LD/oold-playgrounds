@@ -19,6 +19,7 @@ hatchling
 # suite asserts on move between releases. Bump deliberately, then re-run
 # tests/run.mjs.
 jupyterlite-ai==0.20.1
+./extension
 
 # shipped as labextensions so widget views render in the built site
 anywidget
