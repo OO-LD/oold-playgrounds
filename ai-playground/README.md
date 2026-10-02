@@ -11,8 +11,16 @@ piplite-requirements.txt   pinned wheels vendored into the site
 scripts/build.sh           oold wheel build, wheel vendoring, jupyter lite build
 scripts/resolve_wheels.py  regenerates and verifies the vendored set
 scripts/serve.py           static file server, counts bytes served
+contents/OOLD-AGENT.md     the system prompt the agent is given
 tests/run.mjs              tier 1 smoke suite
 tests/offline.mjs          cold start with pypi.org and pythonhosted.org blocked
+tests/kernel-api.mjs       every entry point of contents/oold_agent.py
+tests/git.mjs              contents/oold_git.py against a github stand-in
+tests/providers.mjs        the azure provider labextension
+tests/agent-loop.mjs       the agent loop against a scripted model
+tests/live-agent.mjs       tier 2, opt-in: the loop against a real model
+tests/live-git.mjs         tier 2, opt-in: a real repository and a real PAT
+tests/fixtures/            the github stand-in and the scripted model
 artifacts/                 screenshots and JSON reports from the last run
 ```
 
@@ -162,3 +170,66 @@ and `tests/run.mjs` allowlists it. Any other HTTP error is a failure.
 `jupyterlite-ai` is pinned in `requirements.txt`. Its provider configuration comes from
 docs rather than from a stable reference and the plugin ids asserted on move between
 releases, so bump it deliberately and re-run the suite.
+
+## Suites
+
+Serve the build first; every suite drives a browser against it.
+
+```bash
+./.venv/Scripts/python.exe scripts/serve.py --port 8902
+```
+
+Tier 1 is deterministic and has to pass before a merge. No suite needs a credential
+and none of them reaches a model provider.
+
+```bash
+node tests/run.mjs          # 22 checks
+node tests/offline.mjs      # 44 checks
+node tests/kernel-api.mjs   # 81 checks
+node tests/providers.mjs    # 49 checks
+node tests/git.mjs          # 54 checks
+node tests/agent-loop.mjs   # 54 checks
+```
+
+`agent-loop.mjs` starts `tests/fixtures/llm_stub.py` on port 8921, registers it as a
+`generic` OpenAI-compatible provider and loads `contents/OOLD-AGENT.md` as the system
+prompt. The stub replays a fixed transcript and records every request, so the suite
+asserts what the model was sent rather than what the chat shows. A transcript is
+selected with `POST /__script?name=...`; `GET /__transcripts` lists them.
+
+## Live suites
+
+Tier 2 is opt-in, costs tokens or writes to a repository, and is never required for a
+merge. Without the environment variables both suites print a skip banner and exit 0.
+
+```bash
+OPENAI_API_KEY=... node tests/live-agent.mjs
+OOLD_GIT_TOKEN=... OOLD_GIT_REPO=owner/scratch node tests/live-git.mjs
+```
+
+`live-agent.mjs` runs once per configured provider, because provider differences in the
+shape of a tool call are what it exists to catch:
+
+| provider | variables |
+| --- | --- |
+| `openai` | `OPENAI_API_KEY`, `OPENAI_MODEL` |
+| `anthropic` | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` |
+| `generic` | `GENERIC_API_KEY`, `GENERIC_BASE_URL`, `GENERIC_MODEL` |
+| `azure-openai` | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` |
+| `azure-foundry-anthropic` | `AZURE_FOUNDRY_API_KEY`, `AZURE_FOUNDRY_BASE_URL`, `AZURE_FOUNDRY_MODEL`, `AZURE_FOUNDRY_API_VERSION` |
+
+It pulls the SINTEF CSVs, asks for a schema and an instance for one of them, and checks
+that `oold_cli("validate", ...)` reports `exit code 0`, that `validate_schema` and
+`validate_instance` pass, and that the RDF export carries at least one triple.
+
+A 401 or a 404 from an Azure endpoint is a settings question, not a TypeScript one.
+`AZURE_OPENAI_SETTINGS` and `AZURE_FOUNDRY_SETTINGS` take a JSON object merged over the
+plugin settings, so `apiKeyHeader`, `dropDefaultAuthHeaders`, `apiVersion`, `pathPattern`,
+`pathReplacement`, `headers` and `query` can be turned until the request matches. The
+resolved configuration is printed per provider from `oold-azure-providers:describe`.
+
+`live-git.mjs` writes one file under `oold-playground-live/`, reads it back through a
+fresh pull and deletes it again, so the scratch repository is left as it was found. Set
+`OOLD_GIT_API_BASE` to `http://127.0.0.1:8913` to dry run the steps against
+`tests/fixtures/github_api.py`; that stand-in serves no rate limit headers and no
+contents DELETE, so two checks fail there by construction.
