@@ -69,6 +69,13 @@ for vendored in "$VENDOR"/*.whl; do
 done
 echo "indexing $(( ${#PIPLITE_ARGS[@]} / 2 )) wheels into the site"
 
+echo "== settings overrides =="
+# The settings addon picks up overrides.json from the lite dir, which is $ROOT, and
+# patches it into the settingsOverrides of _output/jupyter-lite.json. There is no
+# flag to pass: jupyterlite-core 0.8.5 still accepts --settings-overrides but no
+# addon reads the trait any more, so the flag builds the same site either way.
+"$PY" "$ROOT/scripts/make_overrides.py"
+
 echo "== jupyter lite build =="
 # No working incremental mode; a stale doit db silently reuses old output.
 rm -rf "$ROOT/_output" "$ROOT/.jupyterlite.doit.db"

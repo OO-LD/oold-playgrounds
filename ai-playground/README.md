@@ -12,6 +12,7 @@ scripts/build.sh           oold wheel build, wheel vendoring, jupyter lite build
 scripts/resolve_wheels.py  regenerates and verifies the vendored set
 scripts/serve.py           static file server, counts bytes served
 contents/OOLD-AGENT.md     the system prompt the agent is given
+scripts/make_overrides.py  turns that brief into the shipped settings override
 tests/run.mjs              tier 1 smoke suite
 tests/offline.mjs          cold start with pypi.org and pythonhosted.org blocked
 tests/kernel-api.mjs       every entry point of contents/oold_agent.py
@@ -161,6 +162,33 @@ search over all output matches the `print()` call itself and passes while the ce
 - One JupyterLite instance per page; two contend for the same service worker.
 - Everything must use relative URLs so the build serves from a subpath.
 
+## Agent brief
+
+`contents/OOLD-AGENT.md` is what the model is told: the Python API, what a check id means,
+and what does not work under Pyodide. It is also the default system prompt of the site, so
+a visitor adds a provider and nothing else.
+
+`scripts/build.sh` runs `scripts/make_overrides.py`, which reads the brief and writes
+`overrides.json` at the root of the lite directory as
+
+```json
+{ "@jupyternaut/persona:settings-model": { "systemPrompt": "# OO-LD agent brief\n..." } }
+```
+
+The settings addon copies that file into `_output/` and patches it into the
+`settingsOverrides` of `_output/jupyter-lite.json`. At runtime the JupyterLite setting
+manager writes each override over the matching schema property default, so
+`IAISettingsModel.config.systemPrompt` is the brief before anything is loaded and the
+user settings stay empty. `tests/agent-loop.mjs` asserts all four steps of that chain.
+
+The override is generated rather than written by hand because the brief is markdown and
+would drift the moment either copy were edited. `overrides.json` is therefore build output
+and is gitignored. `make_overrides.py` fails the build if the brief stops starting with
+`# OO-LD agent brief`, which is the line the suite pins.
+
+`jupyterlite-core` 0.8.5 still accepts `--settings-overrides` but no addon reads the
+trait, so the file is picked up by its location and passing the flag changes nothing.
+
 ## Known noise
 
 `jupyter-mcp-manager` arrives as a dependency of `jupyterlite-ai` and polls
@@ -191,10 +219,11 @@ node tests/git.mjs          # 54 checks
 node tests/agent-loop.mjs   # 54 checks
 ```
 
-`agent-loop.mjs` starts `tests/fixtures/llm_stub.py` on port 8921, registers it as a
-`generic` OpenAI-compatible provider and loads `contents/OOLD-AGENT.md` as the system
-prompt. The stub replays a fixed transcript and records every request, so the suite
-asserts what the model was sent rather than what the chat shows. A transcript is
+`agent-loop.mjs` starts `tests/fixtures/llm_stub.py` on port 8921 and registers it as a
+`generic` OpenAI-compatible provider. The provider is the only setting it writes: the
+system prompt is read, not set, so the checks on what the model was told are claims about
+the built site. The stub replays a fixed transcript and records every request, so the
+suite asserts what the model was sent rather than what the chat shows. A transcript is
 selected with `POST /__script?name=...`; `GET /__transcripts` lists them.
 
 ## Live suites

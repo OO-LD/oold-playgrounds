@@ -11,3 +11,4 @@ wheels/
 
 # playwright screenshots and json reports
 artifacts/
+overrides.json

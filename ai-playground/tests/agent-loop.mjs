@@ -39,13 +39,20 @@ const PY = existsSync(`${ROOT}.venv/Scripts/python.exe`)
 const CHAT_PANEL = "@jupyterlite/ai:chat-panel";
 const SETTINGS_TOKEN = "@jupyternaut/agent:IAISettingsModel";
 const REGISTRY_TOKEN = "@jupyternaut/agent:IProviderRegistry";
+// The Token name, not the package it lives in: ISettingRegistry is declared in
+// @jupyterlab/coreutils and Lumino tokens compare by identity, not by module.
+const SETTING_REGISTRY_TOKEN = "@jupyterlab/coreutils:ISettingRegistry";
+const PERSONA_SETTINGS_PLUGIN = "@jupyternaut/persona:settings-model";
 const EXECUTE_IN_KERNEL = "jupyterlab-ai-commands:execute-in-kernel";
 
 // Planted in the kernel before the run and never told to the stub, so it can only
 // reach a later request by travelling through the kernel and back.
 const NONCE = `nonce-${randomUUID().slice(0, 13)}`;
 
-const BRIEF = readFileSync(BRIEF_PATH, "utf-8");
+// scripts/make_overrides.py strips the file and the build ships that, so the
+// comparison has to strip too. Newlines are normalised because a checkout with
+// core.autocrlf gives node CRLF while python reads the same bytes as LF.
+const BRIEF_TEXT = readFileSync(BRIEF_PATH, "utf-8").replace(/\r\n/g, "\n").trim();
 
 mkdirSync(ARTIFACTS, { recursive: true });
 
@@ -260,8 +267,68 @@ if (!marker(setup, "SETUP validation True")) {
   finish(1);
 }
 
-// ------------------------------------------------------- 2. the stub route
-section("TEST 2: the generic provider is pointed at the stub");
+// --------------------------------------------------- 2. the shipped brief
+section("TEST 2: the site ships the brief as the system prompt");
+// Read before anything in this suite writes a setting. scripts/make_overrides.py
+// turns contents/OOLD-AGENT.md into overrides.json, jupyter lite build puts it in
+// settingsOverrides and the JupyterLite setting manager patches it over the
+// schema default. If any of that stops working the agent gets the stock
+// Jupyternaut prompt and the whole brief is dead weight.
+const shipped = await page.evaluate(
+  async ({ settingsToken, registryToken, pluginId }) => {
+    const out = {};
+    const el = document.getElementById("jupyter-config-data");
+    const config = el ? JSON.parse(el.textContent) : {};
+    const overrides = config.settingsOverrides ?? {};
+    out.overridePlugins = Object.keys(overrides);
+    out.overrideKeys = Object.keys(overrides[pluginId] ?? {});
+    try {
+      const registry = await window.__service(registryToken);
+      const loaded = await registry.load(pluginId);
+      out.schemaDefault = loaded.schema.properties.systemPrompt.default;
+      out.composite = loaded.composite.systemPrompt;
+      out.userWrote = loaded.user.systemPrompt ?? null;
+    } catch (e) {
+      out.registryError = String(e);
+    }
+    try {
+      const settings = await window.__service(settingsToken);
+      out.prompt = settings.config.systemPrompt;
+    } catch (e) {
+      out.modelError = String(e);
+    }
+    return out;
+  },
+  { settingsToken: SETTINGS_TOKEN, registryToken: SETTING_REGISTRY_TOKEN, pluginId: PERSONA_SETTINGS_PLUGIN }
+);
+report.shipped = {
+  ...shipped,
+  schemaDefault: (shipped.schemaDefault ?? "").slice(0, 80),
+  composite: (shipped.composite ?? "").slice(0, 80),
+  prompt: (shipped.prompt ?? "").slice(0, 80),
+};
+console.log(`settingsOverrides plugins: ${JSON.stringify(shipped.overridePlugins)} keys: ${JSON.stringify(shipped.overrideKeys)}`);
+console.log(`systemPrompt out of the box: ${(shipped.prompt ?? "").length} characters`);
+check(
+  `the build ships a settings override for ${PERSONA_SETTINGS_PLUGIN}`,
+  shipped.overridePlugins.includes(PERSONA_SETTINGS_PLUGIN) && shipped.overrideKeys.includes("systemPrompt"),
+  JSON.stringify({ plugins: shipped.overridePlugins, keys: shipped.overrideKeys })
+);
+check("the override reached the plugin schema as its default", shipped.schemaDefault === BRIEF_TEXT, `${(shipped.schemaDefault ?? "").length} of ${BRIEF_TEXT.length} characters`);
+check("nothing is written into the user settings", shipped.userWrote === null, String(shipped.userWrote).slice(0, 60));
+check(
+  "the agent settings model carries the brief with no test intervention",
+  shipped.prompt === BRIEF_TEXT,
+  shipped.modelError ?? `${(shipped.prompt ?? "").length} of ${BRIEF_TEXT.length} characters`
+);
+check(
+  "the stock jupyternaut prompt is not what the site ships",
+  !(shipped.prompt ?? "").includes("You are Jupyternaut"),
+  "settings model prompt scanned for the shipped default"
+);
+
+// ------------------------------------------------------- 3. the stub route
+section("TEST 3: the generic provider is pointed at the stub");
 const providerInfo = await page.evaluate(async (token) => {
   const registry = await window.__service(token);
   const info = registry.getProviderInfo("generic");
@@ -274,8 +341,11 @@ check("jupyterlite-ai ships a generic provider", providerInfo.present === true, 
 check("the generic provider accepts a base URL", providerInfo.supportsBaseURL === true, JSON.stringify(providerInfo));
 check("the generic provider declares tool calling", providerInfo.supportsToolCalling === true, JSON.stringify(providerInfo));
 
+// The provider is the only setting this suite writes. The system prompt is left
+// exactly as the site shipped it, so the assertions further down about what the
+// model was told are claims about the build rather than about this test.
 const wiring = await page.evaluate(
-  async ({ token, baseURL, systemPrompt }) => {
+  async ({ token, baseURL }) => {
     try {
       const settings = await window.__service(token);
       const id = await settings.addProvider({
@@ -286,9 +356,6 @@ const wiring = await page.evaluate(
         apiKey: "stub-key",
       });
       await settings.setActiveProvider(id);
-      // The brief is what the model is told. Everything the suite asserts about
-      // the system prompt comes from contents/OOLD-AGENT.md, nothing is inlined.
-      await settings.updateConfig({ systemPrompt });
       await new Promise((r) => setTimeout(r, 300));
       const entry = settings.getProvider(id);
       return {
@@ -305,7 +372,7 @@ const wiring = await page.evaluate(
       return { ok: false, error: String(e) };
     }
   },
-  { token: SETTINGS_TOKEN, baseURL: `${STUB}/v1`, systemPrompt: BRIEF }
+  { token: SETTINGS_TOKEN, baseURL: `${STUB}/v1` }
 );
 report.wiring = wiring;
 console.log(JSON.stringify(wiring));
@@ -316,7 +383,7 @@ if (!wiring.ok) {
 }
 check("the configuration carries the stub base URL", wiring.baseURL === `${STUB}/v1`, `baseURL=${wiring.baseURL}`);
 check("it became the default chat provider", wiring.defaultProvider === wiring.id, `defaultProvider=${wiring.defaultProvider}`);
-check("the brief is the system prompt", wiring.promptLength === BRIEF.length, `${wiring.promptLength} of ${BRIEF.length} characters`);
+check("adding a provider left the system prompt alone", wiring.promptLength === BRIEF_TEXT.length, `${wiring.promptLength} of ${BRIEF_TEXT.length} characters`);
 
 // -------------------------------------------------------------- the chat
 section("CHAT: open the panel");
@@ -360,8 +427,8 @@ async function runTranscript(name, prompt) {
   return requests.filter((r) => r.scripted);
 }
 
-// ------------------------------------------------- 3. the loop, good schema
-section("TEST 3: the agent runs python in the kernel and gets the answer back");
+// ------------------------------------------------- 4. the loop, good schema
+section("TEST 4: the agent runs python in the kernel and gets the answer back");
 const ok = await runTranscript("schema-ok", "Validate fixture_Measurement.schema.json and report what the checks said.");
 
 check("schema-ok: three model requests, one per turn", ok.length === 3, `${ok.length} requests`);
@@ -408,8 +475,8 @@ if (ok.length === 3) {
   expectLine("the model received the kernel stdout", out?.stdout, "AGENT failures |");
 }
 
-// ------------------------------------------- 4. the loop, failing document
-section("TEST 4: a validation failure arrives as a readable report");
+// ------------------------------------------- 5. the loop, failing document
+section("TEST 5: a validation failure arrives as a readable report");
 const broken = await runTranscript(
   "schema-broken",
   "Validate fixture_Broken.schema.json and fixture_bad.instance.json and name the checks that failed."
@@ -432,8 +499,8 @@ if (broken.length === 3) {
   );
 }
 
-// ------------------------------------------------------- 5. negative control
-section("TEST 5: negative control");
+// ------------------------------------------------------- 6. negative control
+section("TEST 6: negative control");
 
 // (a) The nonce was planted in the kernel by this run and is unknown to the stub
 // and to the notebook. If execute-in-kernel reached some other kernel, or if the
@@ -452,8 +519,10 @@ check(
   `third request ${afterRun.length} characters`
 );
 
-// (b) The brief, not the stock prompt. Without the wiring in TEST 2 the model is
-// told to be Jupyternaut and nothing about oold reaches it.
+// (b) The brief, not the stock prompt, on the wire. Nothing in this suite writes
+// the system prompt, so what the stub received is what the built site ships. Drop
+// the override out of the build and the model is told to be Jupyternaut instead
+// and nothing about oold reaches it.
 const prompts = okRequests.map((r) => r.system ?? "");
 check(
   "every request carries the brief",
@@ -472,7 +541,7 @@ for (const line of [
   );
 }
 check(
-  "the stock jupyternaut prompt was replaced",
+  "the stock jupyternaut prompt never reaches the model",
   prompts.every((p) => !p.includes("You are Jupyternaut")),
   "system prompt scanned for the shipped default"
 );

@@ -35,7 +35,10 @@ const SUITE_TIMEOUT = Number(process.env.SUITE_TIMEOUT ?? 3600000);
 
 const ROOT = new globalThis.URL("../", import.meta.url).pathname.replace(/^\//, "");
 const ARTIFACTS = `${ROOT}artifacts`;
-const BRIEF = readFileSync(`${ROOT}contents/OOLD-AGENT.md`, "utf-8");
+// scripts/make_overrides.py strips the file and the build ships that, so the
+// comparison has to strip too. Newlines are normalised because a checkout with
+// core.autocrlf gives node CRLF while python reads the same bytes as LF.
+const BRIEF_TEXT = readFileSync(`${ROOT}contents/OOLD-AGENT.md`, "utf-8").replace(/\r\n/g, "\n").trim();
 
 const CHAT_PANEL = "@jupyterlite/ai:chat-panel";
 const COMPOSER = ".jp-chat-sidepanel-widget textarea:visible";
@@ -314,12 +317,22 @@ if (!marker(boot, "BOOT csv True")) {
 // The key is written into the settings file rather than into the secrets manager.
 // The secrets manager needs the token of the plugin that owns the namespace,
 // which a test driving the app from outside does not have.
-await page.evaluate(
-  async ({ token, systemPrompt }) => {
+//
+// The system prompt is not written. It comes from the settings override the build
+// ships, so what a real model is given here is what a visitor's model is given.
+const prompt = await page.evaluate(
+  async ({ token }) => {
     const settings = await window.__service(token);
-    await settings.updateConfig({ useSecretsManager: false, systemPrompt, toolsEnabled: true });
+    const before = settings.config.systemPrompt;
+    await settings.updateConfig({ useSecretsManager: false, toolsEnabled: true });
+    return { before, after: settings.config.systemPrompt };
   },
-  { token: SETTINGS_TOKEN, systemPrompt: BRIEF }
+  { token: SETTINGS_TOKEN }
+);
+check(
+  "the site ships the brief as the system prompt",
+  prompt.before === BRIEF_TEXT && prompt.after === BRIEF_TEXT,
+  `${prompt.after.length} of ${BRIEF_TEXT.length} characters`
 );
 
 await page.evaluate(async (id) => {
