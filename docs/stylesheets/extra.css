@@ -9,6 +9,12 @@
   margin: 1.5rem 0 2rem;
 }
 
+/* An odd number of cards would otherwise leave the last one alone in its row,
+   reading as a layout fault rather than a choice. */
+.playground-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 @media screen and (max-width: 44.9375em) {
   .playground-grid {
     grid-template-columns: minmax(0, 1fr);

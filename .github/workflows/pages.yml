@@ -89,6 +89,10 @@ jobs:
           python -m venv jupyterlite/.venv
           jupyterlite/.venv/bin/python -m pip install --quiet \
             -r jupyterlite/requirements.txt
+          npm --prefix ai-playground ci
+          python -m venv ai-playground/.venv
+          ai-playground/.venv/bin/python -m pip install --quiet \
+            -r ai-playground/requirements.txt
 
       - name: Build site
         working-directory: playgrounds

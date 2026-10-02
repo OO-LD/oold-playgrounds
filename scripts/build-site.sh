@@ -35,15 +35,22 @@ echo "== building jupyterlite =="
 # build script resolves when PY is absent.
 (cd "$ROOT/jupyterlite" && env -u PY bash scripts/build.sh)
 
+echo "== building ai playground =="
+# Own venv for the same reason as jupyterlite, and it also puts that venv on PATH:
+# jupyter lite dispatches by PATH rather than by interpreter, so without it the
+# sibling jupyterlite venv builds a site with no jupyterlite-ai in it.
+(cd "$ROOT/ai-playground" && env -u PY bash scripts/build.sh)
+
 echo "== building landing page =="
 (cd "$ROOT" && "$PY" -m zensical build)
 
 echo "== assembling $OUT =="
-rm -rf "$OUT/ty" "$OUT/jupyterlite" "$OUT/schema" "$OUT/awl"
+rm -rf "$OUT/ty" "$OUT/jupyterlite" "$OUT/schema" "$OUT/awl" "$OUT/ai"
 cp -r "$ROOT/ty-playground/dist" "$OUT/ty"
 cp -r "$ROOT/jupyterlite/_output" "$OUT/jupyterlite"
 cp -r "$ROOT/schema-playground/dist" "$OUT/schema"
 cp -r "$ROOT/awl-playground/dist" "$OUT/awl"
+cp -r "$ROOT/ai-playground/_output" "$OUT/ai"
 
 # panel convert names the page after the module. A redirect, not a copy: app.html
 # is tens of megabytes and duplicating it would double the deployed artifact.
