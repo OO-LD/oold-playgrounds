@@ -1,0 +1,6 @@
+id,instrument,serial_number,power_rating_watts,commissioned_on
+1,spectrometer,SN-1001,120.5,2023-04-11
+2,centrifuge,SN-1002,900.0,2021-09-02
+3,thermal_camera,SN-1003,18.25,2024-01-30
+4,balance,SN-1004,7.5,2022-06-17
+5,ph_meter,SN-1005,3.0,2020-11-23
