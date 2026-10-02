@@ -1,0 +1,49 @@
+{
+  "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+  "$id": "fixture_Measurement.schema.json",
+  "x-oold-uuid": "6f9c2b7e-4f1a-4a2d-9c3b-1e5d7a8f0c21",
+  "x-oold-version": "1.0.0",
+  "x-oold-instance-rdf-type": ["qudt:Quantity"],
+  "@context": {
+    "@version": 1.1,
+    "id": "@id",
+    "ex": "https://example.org/measurement/",
+    "schema": "http://schema.org/",
+    "qudt": "http://qudt.org/schema/qudt/",
+    "sensor_id": "schema:identifier",
+    "value": "qudt:numericValue",
+    "unit": "qudt:unit"
+  },
+  "x-oold-context": {
+    "sensor_id": {
+      "http://purl.org/dc/terms/identifier": {
+        "x-oold-sssom": {
+          "predicate_id": "skos:exactMatch",
+          "mapping_set_id": "https://example.org/sets/dcterms.sssom.tsv"
+        }
+      }
+    }
+  },
+  "title": "Measurement",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "iri-reference",
+      "description": "IRI of this measurement"
+    },
+    "sensor_id": {
+      "type": "string",
+      "description": "Identifier of the sensor that produced the reading"
+    },
+    "value": {
+      "type": "number",
+      "description": "Measured numeric value"
+    },
+    "unit": {
+      "type": "string",
+      "description": "Unit symbol of the measured value"
+    }
+  },
+  "required": ["sensor_id", "value"]
+}

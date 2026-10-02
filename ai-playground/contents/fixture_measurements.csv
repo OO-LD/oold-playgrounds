@@ -1,0 +1,5 @@
+taken_at,sensor_id,measurement_id,value,unit,note
+2024-05-01,S-11,m-001,21.5,degC,
+2024-05-02,S-11,m-002,22.0,degC,calibrated
+2024-05-03,S-12,m-003,21.5,degC,
+2024-05-04,S-12,m-004,20.25,degC,

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://oo-ld.org/latest/meta/oold-meta-schema.json",
+  "$id": "fixture_Broken.schema.json",
+  "x-oold-uuid": "not-a-uuid",
+  "x-oold-version": "1.0.0",
+  "@context": {
+    "@version": 1.1,
+    "id": "@id",
+    "sensor_id": "schema:identifier",
+    "value": "qudt:numericValue"
+  },
+  "title": "BrokenMeasurement",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "iri-reference"
+    },
+    "sensor_id": {
+      "type": "string"
+    },
+    "value": {
+      "type": "number"
+    }
+  },
+  "required": ["sensor_id", "value"]
+}
