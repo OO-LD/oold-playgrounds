@@ -34,13 +34,48 @@ for required in ("oold/cli.py", "oold/validation/formats.py"):
 print("wheel ok:", sys.argv[1])
 EOF
 
+PYODIDE_VERSION="$("$PY" -c 'from jupyterlite_pyodide_kernel.constants import PYODIDE_VERSION; print(PYODIDE_VERSION)')"
+
+echo "== vendoring piplite wheels for pyodide $PYODIDE_VERSION =="
+VENDOR="$ROOT/wheels/vendor"
+rm -rf "$VENDOR"
+mkdir -p "$VENDOR"
+# --platform any with --only-binary rejects anything that is not pure python, which is
+# what we want: a compiled artifact has to come from the Pyodide distribution.
+"$PY" -m pip download -r "$ROOT/piplite-requirements.txt" \
+  --dest "$VENDOR" \
+  --no-deps \
+  --only-binary=:all: \
+  --platform any \
+  --python-version 3.14 \
+  --implementation py \
+  --quiet
+
+# The kernel labextension ships ipykernel, pyodide-kernel and piplite but none of their
+# dependencies, so the closure has to start there too.
+BUNDLED="$("$PY" -c 'import sys, pathlib; print(pathlib.Path(sys.prefix, "share/jupyter/labextensions/@jupyterlite/pyodide-kernel-extension/static/pypi"))')"
+
+"$PY" "$ROOT/scripts/resolve_wheels.py" verify \
+  --pyodide-version "$PYODIDE_VERSION" \
+  --cache "$ROOT/.cache" \
+  --agent "$ROOT/contents/oold_agent.py" \
+  --bundled "$BUNDLED" \
+  --dir "$ROOT/wheels" \
+  --dir "$VENDOR"
+
+PIPLITE_ARGS=(--piplite-wheels "$WHEEL")
+for vendored in "$VENDOR"/*.whl; do
+  PIPLITE_ARGS+=(--piplite-wheels "$vendored")
+done
+echo "indexing $(( ${#PIPLITE_ARGS[@]} / 2 )) wheels into the site"
+
 echo "== jupyter lite build =="
 # No working incremental mode; a stale doit db silently reuses old output.
 rm -rf "$ROOT/_output" "$ROOT/.jupyterlite.doit.db"
 (cd "$ROOT" && "$PY" -m jupyter lite build \
   --debug \
   --contents "$ROOT/contents" \
-  --piplite-wheels "$WHEEL" \
+  "${PIPLITE_ARGS[@]}" \
   --no-libarchive \
   --apps lab \
   --no-unused-shared-packages \

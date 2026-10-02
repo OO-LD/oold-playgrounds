@@ -6,12 +6,14 @@ Static JupyterLite site carrying `jupyterlite-ai` plus a wheel built from the lo
 ## Layout
 
 ```
-contents/start.ipynb       placeholder notebook on the contents drive
-contents/sample.csv        placeholder data file
-scripts/build.sh           oold wheel build plus jupyter lite build
+contents/                  notebook, modules and fixtures on the contents drive
+piplite-requirements.txt   pinned wheels vendored into the site
+scripts/build.sh           oold wheel build, wheel vendoring, jupyter lite build
+scripts/resolve_wheels.py  regenerates and verifies the vendored set
 scripts/serve.py           static file server, counts bytes served
 tests/run.mjs              tier 1 smoke suite
-artifacts/                 screenshots and JSON report from the last run
+tests/offline.mjs          cold start with pypi.org and pythonhosted.org blocked
+artifacts/                 screenshots and JSON reports from the last run
 ```
 
 ## Bootstrap
@@ -47,6 +49,35 @@ leaves a half-written `_output/` that still serves `lab/index.html` with HTTP 20
 `build/schemas/all_federated.json` and the contents index are missing. Redirect to a
 file instead.
 
+## Vendored wheels
+
+A cold start must not depend on PyPI being reachable. `build.sh` downloads
+`piplite-requirements.txt` into `wheels/vendor/` and hands every wheel to
+`jupyter lite build --piplite-wheels`, which copies them into `_output/pypi/` and indexes
+them in `all.json`. micropip resolves a name against the Pyodide distribution lock first,
+then against the piplite indexes, then against PyPI, so the vendored copy wins before
+PyPI is ever consulted.
+
+The list holds only what the Pyodide distribution does not already carry. `jsonschema`,
+`referencing`, `click`, `idna`, `jsonpointer`, `pydantic`, `pyyaml` and `typing-extensions`
+are in the distribution and are deliberately absent: vendoring them would ship bytes the
+CDN serves anyway, and anything with a compiled artifact cannot come from PyPI at all.
+`pip download` runs with `--only-binary=:all: --platform any`, so a package that has no
+pure-python wheel fails the build instead of being shipped broken.
+
+`comm` is in the list for the kernel, not for oold. `jupyterlite-pyodide-kernel` bundles
+`ipykernel`, `pyodide-kernel` and `piplite` as wheels but none of their dependencies, and
+`pyodide-kernel` requires `comm`, which the distribution does not carry. Without it the
+kernel never reaches `kernel_info_reply` once PyPI is unreachable.
+
+Every build runs `scripts/resolve_wheels.py verify`, which walks the closure of the kernel
+bootstrap plus `oold_agent.REQUIREMENTS` and fails if a name is neither staged nor in the
+Pyodide lock. `REQUIREMENTS` is read from `contents/oold_agent.py` rather than duplicated,
+so adding one there breaks the build instead of quietly returning to PyPI at runtime.
+
+Regenerate the pins after changing `REQUIREMENTS` or bumping the pyodide kernel; the
+command is in the header of `piplite-requirements.txt`.
+
 ## Serve
 
 ```bash
@@ -81,6 +112,16 @@ The site must also work from a subpath, which is what GitHub Pages serves:
 BASE="http://127.0.0.1:8904/ai-playground/_output" node tests/run.mjs
 ```
 
+`tests/offline.mjs` aborts every request to `pypi.org` and `files.pythonhosted.org` in
+the browser, then asserts the kernel boots, `oold_agent.setup()` completes and
+`oold.validation.formats` imports with its checkers backed by the vendored packages. Its
+last test installs a package that is vendored nowhere and requires that to fail: without
+that control, a block that never reached micropip would look like a pass.
+
+```bash
+node tests/offline.mjs
+```
+
 ### Kernel helpers
 
 `tests/run.mjs` installs two helpers on the page that every later suite reuses:
@@ -107,7 +148,8 @@ search over all output matches the `print()` call itself and passes while the ce
   `oold.model`; the binding is selected at import time.
 - `pyodide_http.patch_all()` patches requests and urllib, never httpx.
 - `jsonschema>=4.25` with its format extras named individually, otherwise
-  `oold.validation.formats` raises `KeyError` at import.
+  `oold.validation.formats` raises `KeyError` at import. `piplite` resolves no extras,
+  which is why `oold_agent.REQUIREMENTS` spells `format-nongpl` out package by package.
 - One JupyterLite instance per page; two contend for the same service worker.
 - Everything must use relative URLs so the build serves from a subpath.
 

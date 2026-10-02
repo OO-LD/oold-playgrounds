@@ -1,0 +1,48 @@
+# Wheels vendored into the site so a cold start never reaches files.pythonhosted.org.
+#
+# micropip resolves a name against the Pyodide distribution lock first, then against the
+# piplite indexes, then against PyPI. These are the distributions in the closure of the
+# kernel bootstrap and of what oold_agent.setup() installs that the Pyodide distribution
+# does not carry. Everything already in the distribution is deliberately absent here:
+# vendoring it would ship bytes the CDN serves anyway, and a compiled artifact cannot
+# come from PyPI at all.
+#
+# comm is in the list for the kernel, not for oold. jupyterlite-pyodide-kernel bundles
+# pyodide-kernel but not its dependencies, and without comm the kernel never reaches
+# kernel_info_reply when PyPI is unreachable.
+#
+# Regenerate after changing oold_agent.REQUIREMENTS or bumping the pyodide kernel:
+#
+#   .venv/Scripts/python.exe scripts/resolve_wheels.py resolve \
+#     --pyodide-version "$(.venv/Scripts/python.exe -c 'from jupyterlite_pyodide_kernel.constants import PYODIDE_VERSION; print(PYODIDE_VERSION)')" \
+#     --cache .cache --agent contents/oold_agent.py \
+#     --bundled .venv/share/jupyter/labextensions/@jupyterlite/pyodide-kernel-extension/static/pypi
+#
+# scripts/build.sh verifies the staged set against the lock on every build, so a stale
+# list fails there rather than silently going back to PyPI at runtime.
+
+argcomplete==3.7.2
+arrow==1.4.0
+black==26.5.1
+comm==0.2.3
+datamodel-code-generator==0.54.1
+fqdn==1.6.0
+frozendict==2.4.7
+genson==1.4.0
+inflect==7.5.0
+isoduration==20.11.0
+isort==8.0.1
+jsondiff==2.2.1
+lark==1.3.1
+mypy-extensions==1.1.0
+pathspec==1.1.1
+pyld==3.3.0
+pytokens==0.4.1
+rdflib==7.6.0
+rfc3339-validator==0.1.4
+rfc3986-validator==0.1.1
+rfc3987-syntax==1.1.0
+sparqlwrapper==2.0.0
+typeguard==4.6.0
+uri-template==1.3.0
+webcolors==25.10.0

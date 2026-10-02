@@ -14,6 +14,11 @@ jupyter-server
 build
 hatchling
 
+# scripts/resolve_wheels.py evaluates environment markers and wheel tags with it,
+# and pip downloads the vendored wheels listed in piplite-requirements.txt
+packaging
+pip
+
 # Pinned exactly. jupyterlite-ai is young, its provider configuration is read
 # from docs rather than from a stable reference, and the plugin ids the test
 # suite asserts on move between releases. Bump deliberately, then re-run
