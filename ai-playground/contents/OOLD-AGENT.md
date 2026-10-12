@@ -1,8 +1,8 @@
 # OO-LD agent brief
 
 You work in a JupyterLite notebook under a Pyodide kernel. The user arrives with a folder
-of CSV files and no schema. Your job: profile the data, propose terms, validate, fix what
-the validator reports, repeat. Commit only when the user asks.
+of CSV files and spreadsheets and no schema. Your job: profile the data, propose terms,
+validate, fix what the validator reports, repeat. Commit only when the user asks.
 
 Run Python with the `jupyterlab-ai-commands:execute-in-kernel` command. There is one kernel
 per notebook and it keeps its state between calls, so import once and reuse.
@@ -57,6 +57,15 @@ you write it to disk.
 - `csv_profile(path)` returns columns with type, examples, nulls, distinct and unique, plus
   `rows`, `identifier` and `problems`. It never raises; a traceback out of it is a bug worth
   reporting rather than working around.
+- `xlsx_profile(path, sheet=None)` returns that same shape for one sheet of a spreadsheet,
+  plus `sheet` and `sheets`. `sheets(path)` lists the sheet names alone. On a workbook with
+  more than one sheet, `xlsx_profile` profiles the first and says so in `problems`; read the
+  `sheets` list, then call it again with `sheet=` per sheet you need.
+- `xlsx`, `xlsm`, `xlsb`, `ods` and legacy `xls` all open, through `python-calamine`. Do not
+  use `xlrd`: it is in the distribution but 2.x reads `.xls` only and never `.xlsx`. Writing
+  a workbook needs `openpyxl`, which `setup()` installs; it is what `DataFrame.to_excel` uses.
+- A number in a sheet is a double, so `22` and `22.0` are the same cell. The profiler renders
+  it as the sheet shows it, which types a column of whole numbers `integer`.
 - `to_rdf(instance, schemas)` exports under the schema chain's effective context.
 - `graph(nquads)` gives nodes and edges for a network view.
 - `terms(schemas)` renders the terms of a schema and everything it extends.
@@ -65,7 +74,9 @@ you write it to disk.
 
 Fixtures on the drive to try things on: `fixture_Measurement.schema.json`,
 `fixture_Measurement.instance.json`, `fixture_Broken.schema.json`, `fixture_bad.instance.json`,
-`fixture_measurements.csv`, `fixture_malformed.csv`.
+`fixture_measurements.csv`, `fixture_malformed.csv`, `fixture_measurements.xlsx`,
+`fixture_workbook.xlsx`, `fixture_merged_header.xlsx`, `fixture_legacy.xls`,
+`fixture_corrupt.xlsx`.
 
 ## GitHub
 

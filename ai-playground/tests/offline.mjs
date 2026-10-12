@@ -244,15 +244,68 @@ for (const [name, value, expected, backing] of CONFORMS) {
   check(`format ${name} on ${JSON.stringify(value)} is ${expected}, backed by ${backing}`, ok, ok ? "" : `lines: ${JSON.stringify(lines(formats).filter((l) => l.startsWith(`FORMATS conforms ${name} `)))}`);
 }
 
-// ------------------------------------------- 4. where the packages came from
-section("TEST 4: nothing was fetched from PyPI");
+// ------------------------------------------------------------ 4. spreadsheets
+section("TEST 4: a spreadsheet parses and one can be written, with PyPI blocked");
+// python-calamine is a compiled wheel and can only come from the Pyodide distribution;
+// openpyxl is pure python, is in no distribution, and is the writer. If the vendoring of
+// openpyxl is wrong, setup() above already failed; this cell says what still works.
+const spreadsheet = await run(
+  "spreadsheet",
+  `
+import oold_agent
+_p = oold_agent.xlsx_profile("fixture_measurements.xlsx")
+print("XLSX ok " + str(_p["ok"]))
+print("XLSX sheet " + str(_p["sheet"]))
+print("XLSX rows " + str(_p["rows"]))
+print("XLSX columns " + ",".join(_c["name"] for _c in _p["columns"]))
+print("XLSX types " + ",".join(_c["type"] for _c in _p["columns"]))
+print("XLSX problems " + str(len(_p["problems"])))
+
+import openpyxl
+print("OPENPYXL file " + openpyxl.__file__)
+_wb = openpyxl.Workbook()
+_ws = _wb.active
+_ws.title = "written"
+_ws.append(["sensor_id", "value"])
+_ws.append(["S-99", 23.5])
+_wb.save("offline_written.xlsx")
+_w = oold_agent.xlsx_profile("offline_written.xlsx")
+print("WRITTEN ok " + str(_w["ok"]))
+print("WRITTEN sheet " + str(_w["sheet"]))
+print("WRITTEN columns " + ",".join(_c["name"] for _c in _w["columns"]))
+print("WRITTEN types " + ",".join(_c["type"] for _c in _w["columns"]))
+
+_bad = oold_agent.xlsx_profile("fixture_corrupt.xlsx")
+print("CORRUPT ok " + str(_bad["ok"]) + " " + _bad["problems"][0].split(":")[0])
+`
+);
+console.log(spreadsheet.stdout);
+if (spreadsheet.errors.length) console.log(spreadsheet.errors.join("\n").slice(0, 3000));
+cellOk("spreadsheet", spreadsheet);
+expectLine("xlsx_profile reads a workbook offline", spreadsheet, "XLSX ok True");
+expectLine("xlsx_profile reads a workbook offline", spreadsheet, "XLSX sheet measurements");
+expectLine("xlsx_profile reads a workbook offline", spreadsheet, "XLSX rows 4");
+expectLine("xlsx_profile reads a workbook offline", spreadsheet, "XLSX columns taken_at,sensor_id,measurement_id,value,unit,note");
+expectLine("xlsx_profile infers types offline", spreadsheet, "XLSX types date,string,string,number,string,string");
+expectLine("xlsx_profile reports no problem offline", spreadsheet, "XLSX problems 0");
+expectLine("openpyxl came from the site, not from PyPI", spreadsheet, "OPENPYXL file /lib/python3.14/site-packages/openpyxl/__init__.py");
+expectLine("a workbook written offline reads back", spreadsheet, "WRITTEN ok True");
+expectLine("a workbook written offline reads back", spreadsheet, "WRITTEN sheet written");
+expectLine("a workbook written offline reads back", spreadsheet, "WRITTEN columns sensor_id,value");
+expectLine("a workbook written offline reads back", spreadsheet, "WRITTEN types string,number");
+// The negative of the same question: the reader has to reject a file that is not one.
+expectLine("a corrupt workbook is still a problem, not a parse", spreadsheet, "CORRUPT ok False could not be read");
+
+// ------------------------------------------- 5. where the packages came from
+section("TEST 5: nothing was fetched from PyPI");
 const origins = await run(
   "origins",
   `
 import importlib.metadata as _md
 for _name in ("oold", "rdflib", "pyld", "SPARQLWrapper", "jsondiff", "datamodel-code-generator",
               "fqdn", "isoduration", "rfc3339-validator", "rfc3986-validator", "rfc3987-syntax",
-              "uri-template", "webcolors", "jsonschema", "referencing", "click", "typing-extensions"):
+              "uri-template", "webcolors", "jsonschema", "referencing", "click", "typing-extensions",
+              "python-calamine", "openpyxl", "et-xmlfile"):
     try:
         print("DIST " + _name + " " + _md.version(_name))
     except Exception as _e:
@@ -268,13 +321,26 @@ check(
   blocked.length === 0,
   blocked.length ? JSON.stringify(blocked.slice(0, 5)) : ""
 );
-for (const name of ["oold", "rdflib", "pyld", "SPARQLWrapper", "jsondiff", "fqdn", "isoduration", "rfc3987-syntax", "webcolors"]) {
+for (const name of [
+  "oold",
+  "rdflib",
+  "pyld",
+  "SPARQLWrapper",
+  "jsondiff",
+  "fqdn",
+  "isoduration",
+  "rfc3987-syntax",
+  "webcolors",
+  "python-calamine",
+  "openpyxl",
+  "et-xmlfile",
+]) {
   const line = lines(origins).find((l) => l.startsWith(`DIST ${name} `));
   check(`${name} is installed in the kernel`, !!line && !line.includes("MISSING"), line ?? "no DIST line");
 }
 
-// ------------------------------------------------------------- 5. the control
-section("TEST 5: control, a package that is vendored nowhere must fail to install");
+// ------------------------------------------------------------- 6. the control
+section("TEST 6: control, a package that is vendored nowhere must fail to install");
 // If this installs, the block never reached micropip and tests 2 to 4 prove nothing.
 const control = await run(
   "control",

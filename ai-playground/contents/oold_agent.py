@@ -22,7 +22,8 @@ Four groups of entry points:
   report, not exceptions.
 * :func:`csv_profile` reads a CSV into the description an agent needs before it can propose
   terms: columns, inferred types, example values, how much is missing, and which column looks
-  like the identifier.
+  like the identifier. :func:`xlsx_profile` and :func:`sheets` answer the same questions for a
+  spreadsheet, one sheet at a time.
 * :func:`to_rdf`, :func:`from_rdf`, :func:`transform`, :func:`graph` and :func:`terms` carry an
   instance between schemas through RDF and render what came out. Ported from the schema
   playground (``schema_playground.transform``, ``.mappings``, ``.graph``, ``.terms``).
@@ -42,6 +43,7 @@ os.environ.setdefault("OOLD_DESCRIPTOR_BINDING", "1")
 
 import contextlib
 import csv
+import datetime
 import html
 import io
 import json
@@ -64,15 +66,18 @@ __all__ = [
     "oold_cli",
     "reference_preserving_frame",
     "setup",
+    "sheets",
     "terms",
     "to_rdf",
     "transform",
     "validate",
     "validate_instance",
     "validate_schema",
+    "xlsx_profile",
 ]
 
 SETUP_HINT = "oold is not installed in this kernel yet. Run: await oold_agent.setup()"
+CALAMINE_HINT = "python-calamine is not installed in this kernel yet. Run: await oold_agent.setup()"
 
 #: Serializations accepted and produced.
 TURTLE = "text/turtle"
@@ -84,10 +89,19 @@ _RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 
 # ---------------------------------------------------------------------------- kernel setup
 
-#: What the validator needs on top of the oold wheel. ``piplite`` resolves no extras, so
-#: ``jsonschema[format-nongpl]`` has to be spelled out: ``oold.validation.formats`` copies
-#: `iri`, `uri`, `hostname` and the rest out of ``Draft202012Validator.FORMAT_CHECKER`` at
-#: import time and raises KeyError on any that the backing package never registered.
+#: What :func:`setup` installs on top of the oold wheel.
+#:
+#: ``piplite`` resolves no extras, so ``jsonschema[format-nongpl]`` has to be spelled out:
+#: ``oold.validation.formats`` copies `iri`, `uri`, `hostname` and the rest out of
+#: ``Draft202012Validator.FORMAT_CHECKER`` at import time and raises KeyError on any that
+#: the backing package never registered.
+#:
+#: ``python-calamine`` is a compiled wheel from the Pyodide distribution and is installed
+#: rather than imported, for the same reason ``pyodide-http`` is: the kernel loads a
+#: distribution package only when the literal import appears in the cell source it is about
+#: to run, and the import in :func:`_workbook` is invisible to that scan. ``openpyxl`` is
+#: not in the distribution and is vendored into the site; it is the only xlsx writer
+#: available, and ``DataFrame.to_excel`` fails without it.
 REQUIREMENTS = (
     "jsonschema>=4.25",
     "referencing>=0.30",
@@ -101,6 +115,8 @@ REQUIREMENTS = (
     "rfc3987-syntax>=1.1.0",
     "uri-template",
     "webcolors>=24.6.0",
+    "python-calamine",
+    "openpyxl",
 )
 
 
@@ -414,7 +430,7 @@ def validate(target: Any, offline: bool = True):
         return _failed_report(str(target), f"{type(exc).__name__}: {exc}")
 
 
-# ---------------------------------------------------------------------------- csv profiling
+# ---------------------------------------------------------------------------- profiling
 
 #: A value counted as missing. Nothing else is: "NA" and "-" mean different things in different
 #: files and guessing at them would hide data the agent has to see.
@@ -451,6 +467,37 @@ def _infer_type(values: list[str]) -> str:
         return "number"
     except ValueError:
         return "string"
+
+
+def _duplicate_names(header: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    for name in header:
+        seen[name] = seen.get(name, 0) + 1
+    return sorted(name for name, count in seen.items() if count > 1)
+
+
+def _column_stats(header: list[str], body: list[list[str]], examples: int) -> list[dict[str, Any]]:
+    """One description per column, from a header and a body already rendered as text.
+
+    Shared by every profiler so a CSV and a sheet describe themselves the same way; the
+    agent is taught one shape and reads it whatever the file was.
+    """
+    columns: list[dict[str, Any]] = []
+    for index, name in enumerate(header):
+        cells = [row[index].strip() if index < len(row) else _NULL for row in body]
+        present = [value for value in cells if value != _NULL]
+        distinct = sorted(set(present))
+        columns.append(
+            {
+                "name": name,
+                "type": _infer_type(present),
+                "examples": distinct[:examples],
+                "nulls": len(cells) - len(present),
+                "distinct": len(distinct),
+                "unique": bool(present) and len(distinct) == len(cells),
+            }
+        )
+    return columns
 
 
 def _guess_identifier(columns: list[dict[str, Any]], rows: int) -> str | None:
@@ -528,10 +575,7 @@ def csv_profile(path: Any, examples: int = 3, max_rows: int = 20000) -> dict[str
         problems.append("header row is empty")
         return profile
 
-    seen: dict[str, int] = {}
-    for name in header:
-        seen[name] = seen.get(name, 0) + 1
-    duplicates = sorted(name for name, count in seen.items() if count > 1)
+    duplicates = _duplicate_names(header)
     if duplicates:
         problems.append(f"duplicate column name(s): {', '.join(duplicates)}")
 
@@ -546,21 +590,186 @@ def csv_profile(path: Any, examples: int = 3, max_rows: int = 20000) -> dict[str
         problems.append(f"{len(ragged)} row(s) do not have {len(header)} fields: line {shown}{more}")
 
     profile["rows"] = len(body)
-    columns: list[dict[str, Any]] = []
-    for index, name in enumerate(header):
-        cells = [row[index].strip() if index < len(row) else _NULL for row in body]
-        present = [value for value in cells if value != _NULL]
-        distinct = sorted(set(present))
-        columns.append(
-            {
-                "name": name,
-                "type": _infer_type(present),
-                "examples": distinct[:examples],
-                "nulls": len(cells) - len(present),
-                "distinct": len(distinct),
-                "unique": bool(present) and len(distinct) == len(cells),
-            }
+    columns = _column_stats(header, body, examples)
+    profile["columns"] = columns
+    profile["identifier"] = _guess_identifier(columns, len(body))
+    profile["ok"] = not problems
+    return profile
+
+
+# ------------------------------------------------------------------------ spreadsheets
+
+
+def _workbook(path: Any):
+    """The calamine workbook for ``path``.
+
+    The import is deferred because this module has to be importable before :func:`setup`
+    has installed anything.
+    """
+    from python_calamine import CalamineWorkbook
+
+    return CalamineWorkbook.from_path(str(path))
+
+
+def _open_workbook(path: Any, problems: list[str]):
+    """``(workbook, sheet_names)``, or ``(None, [])`` with the reason in ``problems``."""
+    try:
+        workbook = _workbook(path)
+        return workbook, list(workbook.sheet_names)
+    except ImportError:
+        problems.append(CALAMINE_HINT)
+    except Exception as exc:
+        # calamine raises its own CalamineError subclasses for a file that is not the
+        # format its suffix claims, and OSError for one that is not there. Neither type
+        # is importable before setup has run, so the contract is kept by type name.
+        problems.append(f"could not be read: {type(exc).__name__}: {exc}")
+    return None, []
+
+
+def sheets(path: Any) -> dict[str, Any]:
+    """Sheet names of a workbook, in workbook order.
+
+    Returns ``{"path", "ok", "sheets", "problems"}`` and never raises, so the answer to
+    "which sheet" can be asked before anything is read.
+    """
+    profile: dict[str, Any] = {"path": str(path), "ok": False, "sheets": [], "problems": []}
+    problems: list[str] = profile["problems"]
+
+    _, names = _open_workbook(path, problems)
+    if problems:
+        return profile
+    profile["sheets"] = names
+    if not names:
+        problems.append("workbook has no sheets")
+        return profile
+    profile["ok"] = True
+    return profile
+
+
+def _cell_text(value: Any) -> str:
+    """A spreadsheet cell as the text the type inference reads.
+
+    xlsx has one numeric type, a double, so a whole number arrives as ``1.0`` where the
+    sheet shows ``1``. It is rendered as the sheet shows it, which costs a column of whole
+    measurements the ``number`` type and gains every counter and year column ``integer``.
+    """
+    if value is None:
+        return _NULL
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() and abs(value) < 1e16 else str(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, datetime.timedelta):
+        return str(value)
+    return str(value).strip()
+
+
+def _pick_sheet(sheet: Any, names: list[str], problems: list[str]) -> str | None:
+    """Which sheet to profile, with the choice stated rather than taken silently."""
+    if sheet is None:
+        chosen = names[0]
+        if len(names) > 1:
+            problems.append(
+                f"workbook has {len(names)} sheets ({', '.join(names)}); profiled "
+                f"{chosen!r}. Pass sheet= to profile another."
+            )
+        return chosen
+    if isinstance(sheet, int) and not isinstance(sheet, bool):
+        if -len(names) <= sheet < len(names):
+            return names[sheet]
+        problems.append(f"no sheet at index {sheet}: the workbook has {len(names)}")
+        return None
+    if sheet in names:
+        return str(sheet)
+    problems.append(f"no sheet named {sheet!r}: the workbook has {', '.join(names)}")
+    return None
+
+
+def xlsx_profile(
+    path: Any, sheet: Any = None, examples: int = 3, max_rows: int = 20000
+) -> dict[str, Any]:
+    """Describe one sheet of a spreadsheet well enough to propose terms for it.
+
+    Returns what :func:`csv_profile` returns, minus ``delimiter`` and plus ``sheet`` and
+    ``sheets``, so an agent reads one shape whatever the file was. ``sheet`` takes a name
+    or an index; without it the first sheet is profiled and a workbook with more than one
+    says so in ``problems``.
+
+    Reading is done by ``python-calamine``: xlsx, xlsm and xlsb are the OOXML family, ods
+    is OpenDocument, and legacy xls opens through its CFB parser. Nothing raises: a file
+    that is not the format its suffix claims comes back with ``ok`` false and the reason
+    in ``problems``.
+    """
+    profile: dict[str, Any] = {
+        "path": str(path),
+        "ok": False,
+        "sheet": None,
+        "sheets": [],
+        "rows": 0,
+        "columns": [],
+        "identifier": None,
+        "problems": [],
+    }
+    problems: list[str] = profile["problems"]
+
+    workbook, names = _open_workbook(path, problems)
+    if workbook is None:
+        return profile
+    profile["sheets"] = names
+    if not names:
+        problems.append("workbook has no sheets")
+        return profile
+
+    chosen = _pick_sheet(sheet, names, problems)
+    if chosen is None:
+        return profile
+    profile["sheet"] = chosen
+
+    try:
+        grid = workbook.get_sheet_by_name(chosen).to_python()
+    except Exception as exc:
+        problems.append(f"sheet {chosen!r} could not be read: {type(exc).__name__}: {exc}")
+        return profile
+
+    rows = [[_cell_text(cell) for cell in row] for row in grid]
+    # A sheet carries its used range, and a cleared row stays in it.
+    while rows and not any(rows[-1]):
+        rows.pop()
+    if not rows:
+        problems.append(f"sheet {chosen!r} is empty")
+        return profile
+
+    header: list[str] = []
+    blank: list[int] = []
+    for index, cell in enumerate(rows[0]):
+        name = cell.strip()
+        if not name:
+            blank.append(index + 1)
+            name = f"column_{index + 1}"
+        header.append(name)
+
+    if len(blank) == len(header):
+        problems.append(f"header row of sheet {chosen!r} is empty")
+        return profile
+    if blank:
+        positions = ", ".join(str(position) for position in blank)
+        problems.append(
+            f"{len(blank)} of {len(header)} header cells are empty, at column {positions}: "
+            f"a merged or title row above the real header reads this way"
         )
+
+    duplicates = _duplicate_names(header)
+    if duplicates:
+        problems.append(f"duplicate column name(s): {', '.join(duplicates)}")
+
+    body = rows[1 : 1 + max_rows]
+    if len(rows) - 1 > max_rows:
+        problems.append(f"only the first {max_rows} of {len(rows) - 1} rows were read")
+
+    profile["rows"] = len(body)
+    columns = _column_stats(header, body, examples)
     profile["columns"] = columns
     profile["identifier"] = _guess_identifier(columns, len(body))
     profile["ok"] = not problems

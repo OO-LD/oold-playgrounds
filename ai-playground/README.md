@@ -13,6 +13,7 @@ scripts/resolve_wheels.py  regenerates and verifies the vendored set
 scripts/serve.py           static file server, counts bytes served
 contents/OOLD-AGENT.md     the system prompt the agent is given
 scripts/make_overrides.py  turns that brief into the shipped settings override
+scripts/make_xlsx_fixtures.py  writes the spreadsheet fixtures the suites profile
 tests/run.mjs              tier 1 smoke suite
 tests/offline.mjs          cold start with pypi.org and pythonhosted.org blocked
 tests/kernel-api.mjs       every entry point of contents/oold_agent.py
@@ -86,6 +87,24 @@ so adding one there breaks the build instead of quietly returning to PyPI at run
 
 Regenerate the pins after changing `REQUIREMENTS` or bumping the pyodide kernel; the
 command is in the header of `piplite-requirements.txt`.
+
+`python-calamine` reads the spreadsheets and is in the distribution as a compiled wasm
+wheel, so it is installed by `setup()` and never vendored. `openpyxl` and `et_xmlfile`
+are in no distribution, are pure python and are vendored: without them nothing can write
+an xlsx, and `DataFrame.to_excel` fails with `ModuleNotFoundError`. `xlrd` is in the
+distribution but is 2.x, reads `.xls` only and is not used.
+
+## Spreadsheet fixtures
+
+```bash
+./.venv/Scripts/python.exe scripts/make_xlsx_fixtures.py
+```
+
+Writes `fixture_measurements.xlsx`, `fixture_workbook.xlsx`, `fixture_merged_header.xlsx`,
+`fixture_legacy.xls` and `fixture_corrupt.xlsx` into `contents/`. They are binary, so a
+diff says nothing about what a test asserts against; the script is the readable copy.
+`fixture_measurements.xlsx` holds the same table as `fixture_measurements.csv`, which is
+what lets `kernel-api.mjs` assert that a sheet and a CSV of one table profile alike.
 
 ## Serve
 
@@ -212,8 +231,8 @@ and none of them reaches a model provider.
 
 ```bash
 node tests/run.mjs          # 22 checks
-node tests/offline.mjs      # 44 checks
-node tests/kernel-api.mjs   # 81 checks
+node tests/offline.mjs      # 60 checks
+node tests/kernel-api.mjs   # 138 checks
 node tests/providers.mjs    # 49 checks
 node tests/git.mjs          # 54 checks
 node tests/agent-loop.mjs   # 54 checks

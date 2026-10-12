@@ -19,6 +19,11 @@ hatchling
 packaging
 pip
 
+# scripts/make_xlsx_fixtures.py writes the spreadsheet fixtures. xlwt is the only way
+# to produce the legacy .xls one; nothing at runtime uses either.
+openpyxl
+xlwt
+
 # Pinned exactly. jupyterlite-ai is young, its provider configuration is read
 # from docs rather than from a stable reference, and the plugin ids the test
 # suite asserts on move between releases. Bump deliberately, then re-run

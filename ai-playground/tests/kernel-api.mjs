@@ -174,6 +174,11 @@ for _n in (
     "fixture_bad.instance.json",
     "fixture_measurements.csv",
     "fixture_malformed.csv",
+    "fixture_measurements.xlsx",
+    "fixture_workbook.xlsx",
+    "fixture_merged_header.xlsx",
+    "fixture_legacy.xls",
+    "fixture_corrupt.xlsx",
 ):
     print(("DRIVE OK " if os.path.exists(_n) else "DRIVE MISSING ") + _n)
 `
@@ -188,6 +193,11 @@ for (const name of [
   "fixture_bad.instance.json",
   "fixture_measurements.csv",
   "fixture_malformed.csv",
+  "fixture_measurements.xlsx",
+  "fixture_workbook.xlsx",
+  "fixture_merged_header.xlsx",
+  "fixture_legacy.xls",
+  "fixture_corrupt.xlsx",
 ]) {
   expectLine("drive", drive, `DRIVE OK ${name}`);
 }
@@ -392,8 +402,163 @@ expectLine("csv_profile missing file", csv, "CSV3 ok False");
 expectLine("csv_profile missing file", csv, "CSV3 problems 1");
 expectLine("csv_profile missing file does not raise", csv, "CSV3 reason could not be read");
 
-// -------------------------------------------------------------------- 7. rdf
-section("TEST 7: to_rdf, from_rdf, graph, terms");
+// ------------------------------------------------------------- 7. spreadsheets
+section("TEST 7: sheets and xlsx_profile");
+const xlsx = await run(
+  "xlsx",
+  `${preamble}
+x = oold_agent.xlsx_profile("fixture_measurements.xlsx")
+print("XL1 ok " + str(x["ok"]))
+print("XL1 sheet " + str(x["sheet"]))
+print("XL1 sheets " + ",".join(x["sheets"]))
+print("XL1 rows " + str(x["rows"]))
+print("XL1 columns " + ",".join(c["name"] for c in x["columns"]))
+print("XL1 types " + ",".join(c["type"] for c in x["columns"]))
+print("XL1 nulls " + ",".join(str(c["nulls"]) for c in x["columns"]))
+print("XL1 distinct " + ",".join(str(c["distinct"]) for c in x["columns"]))
+print("XL1 identifier " + str(x["identifier"]))
+print("XL1 examples value " + ",".join(x["columns"][3]["examples"]))
+print("XL1 problems " + str(len(x["problems"])))
+
+_csv = oold_agent.csv_profile("fixture_measurements.csv")
+_keys = ("name", "type", "nulls", "distinct", "unique")
+_shape = lambda p: [{k: c[k] for k in _keys} for c in p["columns"]]
+print("XL1 same as csv " + str(_shape(_csv) == _shape(x))
+      + " rows " + str(_csv["rows"] == x["rows"])
+      + " identifier " + str(_csv["identifier"] == x["identifier"]))
+print("XL1 keys " + ",".join(sorted(set(_csv) ^ set(x))))
+print("XL1 examples value in csv " + ",".join(_csv["columns"][3]["examples"]))
+
+s = oold_agent.sheets("fixture_workbook.xlsx")
+print("SH1 ok " + str(s["ok"]))
+print("SH1 sheets " + ",".join(s["sheets"]))
+print("SH1 problems " + str(len(s["problems"])))
+s2 = oold_agent.sheets("fixture_nope.xlsx")
+print("SH2 ok " + str(s2["ok"]))
+print("SH2 sheets " + ",".join(s2["sheets"]) + "|")
+print("SH2 reason " + s2["problems"][0].split(":")[0])
+
+w = oold_agent.xlsx_profile("fixture_workbook.xlsx")
+print("XL2 ok " + str(w["ok"]))
+print("XL2 sheet " + str(w["sheet"]))
+print("XL2 sheets " + ",".join(w["sheets"]))
+print("XL2 problems " + " | ".join(w["problems"]))
+print("XL2 columns " + ",".join(c["name"] for c in w["columns"]))
+
+named = oold_agent.xlsx_profile("fixture_workbook.xlsx", sheet="sensors")
+print("XL3 ok " + str(named["ok"]))
+print("XL3 sheet " + str(named["sheet"]))
+print("XL3 rows " + str(named["rows"]))
+print("XL3 columns " + ",".join(c["name"] for c in named["columns"]))
+print("XL3 types " + ",".join(c["type"] for c in named["columns"]))
+print("XL3 problems " + str(len(named["problems"])))
+print("XL3 by index " + str(oold_agent.xlsx_profile("fixture_workbook.xlsx", sheet=1)["sheet"]))
+
+blank = oold_agent.xlsx_profile("fixture_workbook.xlsx", sheet="blank")
+print("XL4 ok " + str(blank["ok"]) + " rows " + str(blank["rows"]))
+print("XL4 problems " + " | ".join(blank["problems"]))
+unknown = oold_agent.xlsx_profile("fixture_workbook.xlsx", sheet="nope")
+print("XL5 ok " + str(unknown["ok"]) + " sheet " + str(unknown["sheet"]))
+print("XL5 problems " + " | ".join(unknown["problems"]))
+
+merged = oold_agent.xlsx_profile("fixture_merged_header.xlsx")
+print("XL6 ok " + str(merged["ok"]))
+print("XL6 rows " + str(merged["rows"]))
+print("XL6 columns " + ",".join(c["name"] for c in merged["columns"]))
+print("XL6 problems " + " | ".join(merged["problems"]))
+
+legacy = oold_agent.xlsx_profile("fixture_legacy.xls")
+print("XL7 ok " + str(legacy["ok"]))
+print("XL7 sheet " + str(legacy["sheet"]))
+print("XL7 columns " + ",".join(c["name"] for c in legacy["columns"]))
+print("XL7 types " + ",".join(c["type"] for c in legacy["columns"]))
+
+broken = oold_agent.xlsx_profile("fixture_corrupt.xlsx")
+print("XL8 returned " + type(broken).__name__)
+print("XL8 ok " + str(broken["ok"]))
+print("XL8 sheets " + ",".join(broken["sheets"]) + "|")
+print("XL8 problems " + str(len(broken["problems"])))
+print("XL8 reason " + broken["problems"][0].split(":")[0])
+absent = oold_agent.xlsx_profile("fixture_nope.xlsx")
+print("XL9 ok " + str(absent["ok"]))
+print("XL9 reason " + absent["problems"][0].split(":")[0])
+`
+);
+console.log(xlsx.stdout);
+if (xlsx.errors.length) console.log(xlsx.errors.join("\n").slice(0, 3000));
+cellOk("xlsx", xlsx);
+expectLine("xlsx_profile positive", xlsx, "XL1 ok True");
+expectLine("xlsx_profile names the sheet it read", xlsx, "XL1 sheet measurements");
+expectLine("xlsx_profile lists the sheets", xlsx, "XL1 sheets measurements");
+expectLine("xlsx_profile positive", xlsx, "XL1 rows 4");
+expectLine("xlsx_profile positive", xlsx, "XL1 columns taken_at,sensor_id,measurement_id,value,unit,note");
+expectLine("xlsx_profile infers types from typed cells", xlsx, "XL1 types date,string,string,number,string,string");
+expectLine("xlsx_profile counts empty cells as nulls", xlsx, "XL1 nulls 0,0,0,0,0,3");
+expectLine("xlsx_profile counts distinct values", xlsx, "XL1 distinct 4,2,4,3,1,1");
+expectLine("xlsx_profile guesses the identifier", xlsx, "XL1 identifier measurement_id");
+expectLine("xlsx_profile positive has no problems", xlsx, "XL1 problems 0");
+// The two files hold the same table, so the agent reads one shape either way.
+expectLine("a sheet and a CSV of the same table profile alike", xlsx, "XL1 same as csv True rows True identifier True");
+expectLine("the shapes differ only in delimiter against sheet and sheets", xlsx, "XL1 keys delimiter,sheet,sheets");
+// xlsx has one numeric type, a double, so 22.0 and 22 are the same cell and the
+// profile shows what the sheet shows. The CSV keeps the text it was written with.
+expectLine("whole numbers render as the sheet shows them", xlsx, "XL1 examples value 20.25,21.5,22");
+expectLine("the CSV of the same table keeps its own text", xlsx, "XL1 examples value in csv 20.25,21.5,22.0");
+expectLine("sheets positive", xlsx, "SH1 ok True");
+expectLine("sheets lists every sheet in workbook order", xlsx, "SH1 sheets measurements,sensors,blank");
+expectLine("sheets positive has no problems", xlsx, "SH1 problems 0");
+expectLine("sheets negative", xlsx, "SH2 ok False");
+expectLine("sheets negative lists nothing", xlsx, "SH2 sheets |");
+expectLine("sheets negative does not raise", xlsx, "SH2 reason could not be read");
+expectLine("multi-sheet workbook profiles one sheet", xlsx, "XL2 ok False");
+expectLine("multi-sheet workbook profiles the first sheet", xlsx, "XL2 sheet measurements");
+expectLine("multi-sheet workbook reports every sheet", xlsx, "XL2 sheets measurements,sensors,blank");
+expectLine(
+  "the sheet it chose is stated, not taken silently",
+  xlsx,
+  "XL2 problems workbook has 3 sheets (measurements, sensors, blank); profiled 'measurements'. Pass sheet= to profile another."
+);
+expectLine("multi-sheet workbook still profiles columns", xlsx, "XL2 columns taken_at,sensor_id,measurement_id,value,unit,note");
+// Naming the sheet answers the question, so there is nothing left to report.
+expectLine("a named sheet is profiled without comment", xlsx, "XL3 ok True");
+expectLine("a named sheet is the one read", xlsx, "XL3 sheet sensors");
+expectLine("a named sheet is profiled", xlsx, "XL3 rows 2");
+expectLine("a named sheet is profiled", xlsx, "XL3 columns sensor_id,placed_at,depth_m");
+expectLine("a named sheet is profiled", xlsx, "XL3 types string,string,number");
+expectLine("a named sheet raises no sheet problem", xlsx, "XL3 problems 0");
+expectLine("sheet also takes an index", xlsx, "XL3 by index sensors");
+expectLine("an empty sheet is data, not an exception", xlsx, "XL4 ok False rows 0");
+expectLine("an empty sheet says so", xlsx, "XL4 problems sheet 'blank' is empty");
+expectLine("an unknown sheet name is data", xlsx, "XL5 ok False sheet None");
+expectLine(
+  "an unknown sheet name lists the sheets there are",
+  xlsx,
+  "XL5 problems no sheet named 'nope': the workbook has measurements, sensors, blank"
+);
+expectLine("a merged header row does not raise", xlsx, "XL6 ok False");
+expectLine("a merged header row leaves the rest readable", xlsx, "XL6 rows 3");
+expectLine("empty header cells are named by position", xlsx, "XL6 columns Measurements 2024,column_2,column_3");
+expectLine(
+  "a merged header row arrives as a problem",
+  xlsx,
+  "XL6 problems 2 of 3 header cells are empty, at column 2, 3: a merged or title row above the real header reads this way"
+);
+// xlrd in the distribution is 2.x and reads only this format, never xlsx; calamine
+// reads it too, through its own CFB parser, so the brief can send the model one way.
+expectLine("legacy xls opens through calamine", xlsx, "XL7 ok True");
+expectLine("legacy xls opens through calamine", xlsx, "XL7 sheet legacy");
+expectLine("legacy xls opens through calamine", xlsx, "XL7 columns sensor_id,placed_at,depth_m");
+expectLine("legacy xls opens through calamine", xlsx, "XL7 types string,string,number");
+expectLine("a corrupt workbook comes back as data", xlsx, "XL8 returned dict");
+expectLine("a corrupt workbook comes back as data", xlsx, "XL8 ok False");
+expectLine("a corrupt workbook lists no sheets", xlsx, "XL8 sheets |");
+expectLine("a corrupt workbook reports one problem", xlsx, "XL8 problems 1");
+expectLine("a corrupt workbook does not raise", xlsx, "XL8 reason could not be read");
+expectLine("a missing workbook does not raise", xlsx, "XL9 ok False");
+expectLine("a missing workbook does not raise", xlsx, "XL9 reason could not be read");
+
+// -------------------------------------------------------------------- 8. rdf
+section("TEST 8: to_rdf, from_rdf, graph, terms");
 const rdf = await run(
   "rdf",
   `${preamble}
@@ -462,7 +627,7 @@ expectLine(
 expectLine("from_rdf positive", rdf, 'ROUND1 {"id": "ex:m-001", "sensor_id": "S-11", "unit": "degC", "value": 21.5}');
 expectLine("from_rdf negative", rdf, "ROUND2 keys |");
 
-// ------------------------------------------------------------ 8. diagnostics
+// ------------------------------------------------------------ 9. diagnostics
 section("DIAGNOSTICS");
 console.log(`pageerror count: ${pageErrors.length}`);
 pageErrors.forEach((e) => console.log("  " + e.slice(0, 300)));
