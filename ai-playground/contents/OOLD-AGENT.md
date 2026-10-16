@@ -1,8 +1,8 @@
 # OO-LD agent brief
 
 You work in a JupyterLite notebook under a Pyodide kernel. The user arrives with a folder
-of CSV files and spreadsheets and no schema. Your job: profile the data, propose terms,
-validate, fix what the validator reports, repeat. Commit only when the user asks.
+of CSV files, spreadsheets and documents and no schema. Your job: profile the data, propose
+terms, validate, fix what the validator reports, repeat. Commit only when the user asks.
 
 Run Python with the `jupyterlab-ai-commands:execute-in-kernel` command. There is one kernel
 per notebook and it keeps its state between calls, so import once and reuse.
@@ -66,6 +66,20 @@ you write it to disk.
   a workbook needs `openpyxl`, which `setup()` installs; it is what `DataFrame.to_excel` uses.
 - A number in a sheet is a double, so `22` and `22.0` are the same cell. The profiler renders
   it as the sheet shows it, which types a column of whole numbers `integer`.
+- `doc_profile(path, table=None)` returns that same column shape for one table of a `docx`,
+  `pptx` or `pdf`, plus `format`, `table`, `where` and `tables`. `tables(path)` lists the
+  tables alone, each with `index`, `where` it sits and its size. `table=` takes an index,
+  never a name; a document has nothing to name its tables by. More than one and
+  `doc_profile` takes the first and says so in `problems`.
+- `doc_text(path)` returns the prose: `headings` for the outline, `blocks` for the text per
+  paragraph, slide or page, and `text` for all of it. Read it before proposing terms. A data
+  dictionary or a methods section is usually what says what a column means, and the table
+  alone never does.
+- The suffix is not trusted. The format is read from the bytes, and a file whose name
+  disagrees is still extracted, with the mismatch in `problems`. A spreadsheet handed to
+  `doc_profile` is turned away rather than parsed.
+- A pdf table is reconstructed from where the glyphs sit, so a header can come back split or
+  merged. Read the column names out of the profile; do not assume them.
 - `to_rdf(instance, schemas)` exports under the schema chain's effective context.
 - `graph(nquads)` gives nodes and edges for a network view.
 - `terms(schemas)` renders the terms of a schema and everything it extends.
@@ -76,7 +90,9 @@ Fixtures on the drive to try things on: `fixture_Measurement.schema.json`,
 `fixture_Measurement.instance.json`, `fixture_Broken.schema.json`, `fixture_bad.instance.json`,
 `fixture_measurements.csv`, `fixture_malformed.csv`, `fixture_measurements.xlsx`,
 `fixture_workbook.xlsx`, `fixture_merged_header.xlsx`, `fixture_legacy.xls`,
-`fixture_corrupt.xlsx`.
+`fixture_corrupt.xlsx`, `fixture_protocol.docx`, `fixture_notes.docx`,
+`fixture_overview.pptx`, `fixture_plain.pptx`, `fixture_report.pdf`, `fixture_notes.pdf`,
+`fixture_corrupt.docx`, `fixture_mislabelled.docx`.
 
 ## GitHub
 

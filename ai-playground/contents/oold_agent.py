@@ -23,7 +23,9 @@ Four groups of entry points:
 * :func:`csv_profile` reads a CSV into the description an agent needs before it can propose
   terms: columns, inferred types, example values, how much is missing, and which column looks
   like the identifier. :func:`xlsx_profile` and :func:`sheets` answer the same questions for a
-  spreadsheet, one sheet at a time.
+  spreadsheet, one sheet at a time, and :func:`doc_profile` and :func:`tables` answer them for
+  a table inside a docx, a pptx or a pdf. :func:`doc_text` returns the prose next to those
+  tables, which is usually what says what a column means.
 * :func:`to_rdf`, :func:`from_rdf`, :func:`transform`, :func:`graph` and :func:`terms` carry an
   instance between schemas through RDF and render what came out. Ported from the schema
   playground (``schema_playground.transform``, ``.mappings``, ``.graph``, ``.terms``).
@@ -50,6 +52,7 @@ import json
 import re
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -61,12 +64,15 @@ __all__ = [
     "TURTLE",
     "chain",
     "csv_profile",
+    "doc_profile",
+    "doc_text",
     "from_rdf",
     "graph",
     "oold_cli",
     "reference_preserving_frame",
     "setup",
     "sheets",
+    "tables",
     "terms",
     "to_rdf",
     "transform",
@@ -78,6 +84,7 @@ __all__ = [
 
 SETUP_HINT = "oold is not installed in this kernel yet. Run: await oold_agent.setup()"
 CALAMINE_HINT = "python-calamine is not installed in this kernel yet. Run: await oold_agent.setup()"
+DOCUMENT_HINT = "the document readers are not installed in this kernel yet. Run: await oold_agent.setup()"
 
 #: Serializations accepted and produced.
 TURTLE = "text/turtle"
@@ -96,12 +103,18 @@ _RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 #: ``Draft202012Validator.FORMAT_CHECKER`` at import time and raises KeyError on any that
 #: the backing package never registered.
 #:
-#: ``python-calamine`` is a compiled wheel from the Pyodide distribution and is installed
-#: rather than imported, for the same reason ``pyodide-http`` is: the kernel loads a
-#: distribution package only when the literal import appears in the cell source it is about
-#: to run, and the import in :func:`_workbook` is invisible to that scan. ``openpyxl`` is
-#: not in the distribution and is vendored into the site; it is the only xlsx writer
-#: available, and ``DataFrame.to_excel`` fails without it.
+#: ``python-calamine`` and ``pymupdf`` are compiled wheels from the Pyodide distribution and
+#: are installed rather than imported, for the same reason ``pyodide-http`` is: the kernel
+#: loads a distribution package only when the literal import appears in the cell source it is
+#: about to run, and the imports in :func:`_workbook` and :func:`_pdf_content` are invisible
+#: to that scan. ``openpyxl``, ``python-docx`` and ``python-pptx`` are in no distribution, are
+#: pure python and are vendored into the site. ``openpyxl`` is the only xlsx writer available
+#: and ``DataFrame.to_excel`` fails without it.
+#:
+#: ``pymupdf`` is the largest single thing a cold start pulls: 17.3 MB from the CDN, 2.2 s
+#: of the 9.8 s :func:`setup` takes against a local server, and nothing on a second visit
+#: because the CDN serves it with a year of cache. It reads pdf text and locates tables in
+#: one package; ``pypdf`` would vendor as pure python and has no table extraction at all.
 REQUIREMENTS = (
     "jsonschema>=4.25",
     "referencing>=0.30",
@@ -117,6 +130,9 @@ REQUIREMENTS = (
     "webcolors>=24.6.0",
     "python-calamine",
     "openpyxl",
+    "pymupdf",
+    "python-docx",
+    "python-pptx",
 )
 
 
@@ -500,6 +516,31 @@ def _column_stats(header: list[str], body: list[list[str]], examples: int) -> li
     return columns
 
 
+def _header_names(cells: list[str]) -> tuple[list[str], list[int]]:
+    """``(names, positions that had none)`` for a header row.
+
+    An empty header cell is named by its position rather than dropped, so a sheet or a
+    table with a merged title row above the real header still profiles.
+    """
+    header: list[str] = []
+    blank: list[int] = []
+    for index, cell in enumerate(cells):
+        name = cell.strip()
+        if not name:
+            blank.append(index + 1)
+            name = f"column_{index + 1}"
+        header.append(name)
+    return header, blank
+
+
+def _blank_header_problem(header: list[str], blank: list[int]) -> str:
+    positions = ", ".join(str(position) for position in blank)
+    return (
+        f"{len(blank)} of {len(header)} header cells are empty, at column {positions}: "
+        f"a merged or title row above the real header reads this way"
+    )
+
+
 def _guess_identifier(columns: list[dict[str, Any]], rows: int) -> str | None:
     """Which column looks like the row identifier.
 
@@ -741,24 +782,12 @@ def xlsx_profile(
         problems.append(f"sheet {chosen!r} is empty")
         return profile
 
-    header: list[str] = []
-    blank: list[int] = []
-    for index, cell in enumerate(rows[0]):
-        name = cell.strip()
-        if not name:
-            blank.append(index + 1)
-            name = f"column_{index + 1}"
-        header.append(name)
-
+    header, blank = _header_names(rows[0])
     if len(blank) == len(header):
         problems.append(f"header row of sheet {chosen!r} is empty")
         return profile
     if blank:
-        positions = ", ".join(str(position) for position in blank)
-        problems.append(
-            f"{len(blank)} of {len(header)} header cells are empty, at column {positions}: "
-            f"a merged or title row above the real header reads this way"
-        )
+        problems.append(_blank_header_problem(header, blank))
 
     duplicates = _duplicate_names(header)
     if duplicates:
@@ -772,6 +801,390 @@ def xlsx_profile(
     columns = _column_stats(header, body, examples)
     profile["columns"] = columns
     profile["identifier"] = _guess_identifier(columns, len(body))
+    profile["ok"] = not problems
+    return profile
+
+
+# --------------------------------------------------------------------------- documents
+
+#: First bytes that say what a file is. The suffix is checked against this and never
+#: trusted for it: a report arrives named .doc as often as .docx, and a renamed file
+#: handed to the wrong reader comes back as a parse error instead of its content.
+_PDF_MAGIC = b"%PDF-"
+_ZIP_MAGIC = b"PK\x03\x04"
+
+#: The part inside an OOXML zip that names the format. Spreadsheets are listed so one
+#: can be turned away with the function that does read it rather than a parse error.
+_OOXML_PARTS = (
+    ("word/document.xml", "docx"),
+    ("ppt/presentation.xml", "pptx"),
+    ("xl/workbook.xml", "xlsx"),
+)
+
+_WHITESPACE = re.compile(r"\s+")
+
+
+def _cell_line(value: Any) -> str:
+    """A table cell as a single line.
+
+    A pdf cell carries the line breaks of its layout, and a docx cell can carry several
+    paragraphs. Either way the cell holds one value and is read as one.
+    """
+    return _WHITESPACE.sub(" ", _cell_text(value)).strip()
+
+
+def _readable(text: Any) -> str:
+    """Text as a reader sees it: no trailing space on a line, no run of blank ones."""
+    out: list[str] = []
+    for raw in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if line or (out and out[-1]):
+            out.append(line)
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out)
+
+
+def _ooxml_kind(path: Any, problems: list[str]) -> str | None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+    except Exception as exc:
+        problems.append(f"could not be read: {type(exc).__name__}: {exc}")
+        return None
+    for part, kind in _OOXML_PARTS:
+        if part in names:
+            return kind
+    problems.append("zip archive with no word/, ppt/ or xl/ part: not an Office document")
+    return None
+
+
+def _document_format(path: Any, problems: list[str]) -> str | None:
+    """Which of docx, pptx and pdf a file is, decided by its bytes."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(8)
+    except OSError as exc:
+        problems.append(f"could not be read: {exc}")
+        return None
+
+    if head.startswith(_PDF_MAGIC):
+        found = "pdf"
+    elif head.startswith(_ZIP_MAGIC):
+        found = _ooxml_kind(path, problems)
+        if found is None:
+            return None
+    else:
+        problems.append(f"not a docx, pptx or pdf: the file starts with {head[:4]!r}")
+        return None
+
+    if found == "xlsx":
+        problems.append("this is a spreadsheet, not a document: read it with xlsx_profile or sheets")
+        return None
+
+    suffix = Path(path).suffix.lower().lstrip(".")
+    if suffix != found:
+        problems.append(f"suffix says {suffix or 'nothing'} and the bytes say {found}; read as {found}")
+    return found
+
+
+def _docx_content(path: Any, problems: list[str]):
+    import docx
+
+    document = docx.Document(str(path))
+    blocks: list[dict[str, str]] = []
+    headings: list[str] = []
+    for index, paragraph in enumerate(document.paragraphs, start=1):
+        text = _readable(paragraph.text)
+        if not text:
+            continue
+        blocks.append({"where": f"paragraph {index}", "text": text})
+        style = getattr(paragraph.style, "name", "") or ""
+        if style.startswith("Heading") or style == "Title":
+            headings.append(text)
+    grids = [
+        (f"table {index}", [[_cell_line(cell.text) for cell in row.cells] for row in table.rows])
+        for index, table in enumerate(document.tables, start=1)
+    ]
+    return grids, blocks, headings
+
+
+def _pptx_content(path: Any, problems: list[str]):
+    import pptx
+
+    presentation = pptx.Presentation(str(path))
+    grids: list[tuple[str, list[list[str]]]] = []
+    blocks: list[dict[str, str]] = []
+    headings: list[str] = []
+    for number, slide in enumerate(presentation.slides, start=1):
+        where = f"slide {number}"
+        title = slide.shapes.title
+        if title is not None and title.has_text_frame:
+            heading = _readable(title.text_frame.text)
+            if heading:
+                headings.append(heading)
+        spoken: list[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                text = _readable(shape.text_frame.text)
+                if text:
+                    spoken.append(text)
+            if getattr(shape, "has_table", False):
+                grids.append(
+                    (where, [[_cell_line(cell.text) for cell in row.cells] for row in shape.table.rows])
+                )
+        if spoken:
+            blocks.append({"where": where, "text": "\n".join(spoken)})
+    return grids, blocks, headings
+
+
+def _pdf_content(path: Any, problems: list[str]):
+    import pymupdf
+
+    grids: list[tuple[str, list[list[str]]]] = []
+    blocks: list[dict[str, str]] = []
+    headings: list[str] = []
+    with pymupdf.open(str(path)) as document:
+        try:
+            headings = [str(entry[1]) for entry in document.get_toc()]
+        except Exception as exc:
+            problems.append(f"outline could not be read: {type(exc).__name__}: {exc}")
+        for number, page in enumerate(document, start=1):
+            where = f"page {number}"
+            text = _readable(page.get_text())
+            if text:
+                blocks.append({"where": where, "text": text})
+            try:
+                found = page.find_tables()
+            except Exception as exc:
+                problems.append(f"{where}: tables could not be located: {type(exc).__name__}: {exc}")
+                continue
+            for table in found.tables:
+                grids.append((where, [[_cell_line(cell) for cell in row] for row in table.extract()]))
+    return grids, blocks, headings
+
+
+#: One reader per format, each ``(path, problems) -> (grids, blocks, headings)``. Only the
+#: pdf reader has a partial failure to report: an outline or a page of tables can be
+#: unreadable while the rest of the document is fine. The other two read or raise.
+_DOCUMENT_READERS = {"docx": _docx_content, "pptx": _pptx_content, "pdf": _pdf_content}
+
+
+def _read_document(path: Any, problems: list[str]):
+    """``(format, (grids, blocks, headings))``, with ``None`` content if nothing was read.
+
+    The format is reported even when reading fails, because "the pdf is damaged" and
+    "that file is not a pdf" are different answers for the caller.
+    """
+    found = _document_format(path, problems)
+    if found is None:
+        return None, None
+    try:
+        return found, _DOCUMENT_READERS[found](path, problems)
+    except ImportError:
+        problems.append(DOCUMENT_HINT)
+    except Exception as exc:
+        problems.append(f"could not be read: {type(exc).__name__}: {exc}")
+    return found, None
+
+
+def _table_entries(grids: list[tuple[str, list[list[str]]]]) -> list[dict[str, Any]]:
+    """One line per table: enough to choose between them without profiling all of them."""
+    return [
+        {
+            "index": index,
+            "where": where,
+            "rows": max(len(grid) - 1, 0),
+            "columns": len(grid[0]) if grid else 0,
+        }
+        for index, (where, grid) in enumerate(grids)
+    ]
+
+
+def _pick_table(table: Any, entries: list[dict[str, Any]], problems: list[str]) -> int | None:
+    """Which table to profile, with the choice stated rather than taken silently."""
+    if table is None:
+        if len(entries) > 1:
+            listed = ", ".join(f"{entry['index']} at {entry['where']}" for entry in entries)
+            problems.append(
+                f"document has {len(entries)} tables ({listed}); profiled table 0. "
+                f"Pass table= to profile another."
+            )
+        return 0
+    if isinstance(table, int) and not isinstance(table, bool):
+        if -len(entries) <= table < len(entries):
+            return table % len(entries)
+        problems.append(f"no table at index {table}: the document has {len(entries)}")
+        return None
+    problems.append(f"table= takes an index, not {table!r}: the document has {len(entries)} tables")
+    return None
+
+
+def tables(path: Any) -> dict[str, Any]:
+    """Tables of a docx, a pptx or a pdf, in reading order.
+
+    Returns ``{"path", "ok", "format", "tables", "problems"}``. Each entry carries its
+    ``index``, ``where`` it sits (``table 2``, ``slide 3``, ``page 2``) and its ``rows``
+    and ``columns`` counts, so "which table" can be answered before one is profiled.
+    Never raises; this is the document counterpart of :func:`sheets`.
+    """
+    profile: dict[str, Any] = {
+        "path": str(path),
+        "ok": False,
+        "format": None,
+        "tables": [],
+        "problems": [],
+    }
+    problems: list[str] = profile["problems"]
+
+    found, content = _read_document(path, problems)
+    profile["format"] = found
+    if content is None:
+        return profile
+
+    grids, _, _ = content
+    profile["tables"] = _table_entries(grids)
+    if not grids:
+        problems.append("document has no tables; its text is in doc_text")
+        return profile
+    profile["ok"] = not problems
+    return profile
+
+
+def doc_profile(
+    path: Any, table: Any = None, examples: int = 3, max_rows: int = 20000
+) -> dict[str, Any]:
+    """Describe one table of a document well enough to propose terms for it.
+
+    Returns what :func:`csv_profile` returns, minus ``delimiter`` and plus ``format``,
+    ``table``, ``where`` and ``tables``, so a table in a report profiles into the shape
+    the agent already reads for a CSV and a sheet.
+
+    ``table`` takes an index into :func:`tables`; a document has no names to address its
+    tables by. Without it the first is profiled and a document with more than one says so
+    in ``problems``. Nothing raises: a file that is not the format its suffix claims comes
+    back with ``ok`` false and the reason in ``problems``.
+    """
+    profile: dict[str, Any] = {
+        "path": str(path),
+        "ok": False,
+        "format": None,
+        "table": None,
+        "where": None,
+        "tables": [],
+        "rows": 0,
+        "columns": [],
+        "identifier": None,
+        "problems": [],
+    }
+    problems: list[str] = profile["problems"]
+
+    found, content = _read_document(path, problems)
+    profile["format"] = found
+    if content is None:
+        return profile
+
+    grids, _, _ = content
+    entries = _table_entries(grids)
+    profile["tables"] = entries
+    if not entries:
+        problems.append("document has no tables; its text is in doc_text")
+        return profile
+
+    chosen = _pick_table(table, entries, problems)
+    if chosen is None:
+        return profile
+    where, grid = grids[chosen]
+    profile["table"] = chosen
+    profile["where"] = where
+
+    rows = list(grid)
+    while rows and not any(rows[-1]):
+        rows.pop()
+    if not rows:
+        problems.append(f"table {chosen} at {where} is empty")
+        return profile
+
+    header, blank = _header_names(rows[0])
+    if len(blank) == len(header):
+        problems.append(f"header row of table {chosen} at {where} is empty")
+        return profile
+    if blank:
+        problems.append(_blank_header_problem(header, blank))
+
+    duplicates = _duplicate_names(header)
+    if duplicates:
+        problems.append(f"duplicate column name(s): {', '.join(duplicates)}")
+
+    body = rows[1 : 1 + max_rows]
+    if len(rows) - 1 > max_rows:
+        problems.append(f"only the first {max_rows} of {len(rows) - 1} rows were read")
+
+    ragged = [index + 2 for index, row in enumerate(body) if len(row) != len(header)]
+    if ragged:
+        shown = ", ".join(str(position) for position in ragged[:5])
+        more = f" (+{len(ragged) - 5} more)" if len(ragged) > 5 else ""
+        problems.append(f"{len(ragged)} row(s) do not have {len(header)} cells: row {shown}{more}")
+
+    profile["rows"] = len(body)
+    columns = _column_stats(header, body, examples)
+    profile["columns"] = columns
+    profile["identifier"] = _guess_identifier(columns, len(body))
+    profile["ok"] = not problems
+    return profile
+
+
+def doc_text(path: Any, max_chars: int = 20000) -> dict[str, Any]:
+    """Readable text of a docx, a pptx or a pdf.
+
+    Returns ``{"path", "ok", "format", "headings", "blocks", "text", "chars", "problems"}``.
+    ``headings`` is the outline: docx heading paragraphs, pptx slide titles, the pdf
+    bookmark tree. ``blocks`` carries the text per unit, each with ``where`` it came from,
+    and ``text`` is those blocks joined. ``chars`` is the length of the whole document even
+    when ``max_chars`` cut it short.
+
+    What a column means is usually written next to the table rather than in it, so this is
+    the half of an extraction that :func:`doc_profile` does not answer. Never raises.
+    """
+    profile: dict[str, Any] = {
+        "path": str(path),
+        "ok": False,
+        "format": None,
+        "headings": [],
+        "blocks": [],
+        "text": "",
+        "chars": 0,
+        "problems": [],
+    }
+    problems: list[str] = profile["problems"]
+
+    found, content = _read_document(path, problems)
+    profile["format"] = found
+    if content is None:
+        return profile
+
+    _, blocks, headings = content
+    profile["headings"] = headings
+    profile["chars"] = sum(len(block["text"]) for block in blocks) + max(len(blocks) - 1, 0) * 2
+
+    kept: list[dict[str, str]] = []
+    budget = max_chars
+    for block in blocks:
+        if len(block["text"]) > budget:
+            break
+        kept.append(block)
+        budget -= len(block["text"]) + 2
+    profile["blocks"] = kept
+    profile["text"] = "\n\n".join(block["text"] for block in kept)
+
+    if not blocks:
+        problems.append("document has no text; its tables are in tables and doc_profile")
+        return profile
+    if len(kept) < len(blocks):
+        problems.append(
+            f"only {len(kept)} of {len(blocks)} blocks were read: the document is "
+            f"{profile['chars']} characters and max_chars is {max_chars}"
+        )
     profile["ok"] = not problems
     return profile
 

@@ -14,6 +14,7 @@ scripts/serve.py           static file server, counts bytes served
 contents/OOLD-AGENT.md     the system prompt the agent is given
 scripts/make_overrides.py  turns that brief into the shipped settings override
 scripts/make_xlsx_fixtures.py  writes the spreadsheet fixtures the suites profile
+scripts/make_doc_fixtures.py   writes the docx, pptx and pdf fixtures
 tests/run.mjs              tier 1 smoke suite
 tests/offline.mjs          cold start with pypi.org and pythonhosted.org blocked
 tests/kernel-api.mjs       every entry point of contents/oold_agent.py
@@ -94,6 +95,18 @@ are in no distribution, are pure python and are vendored: without them nothing c
 an xlsx, and `DataFrame.to_excel` fails with `ModuleNotFoundError`. `xlrd` is in the
 distribution but is 2.x, reads `.xls` only and is not used.
 
+`python-docx` and `python-pptx` read the documents, are in no distribution, are pure
+python and are vendored. `XlsxWriter` is vendored for `python-pptx`, which requires it
+and is the only thing that does; micropip resolves the whole dependency set or none of
+it. `pymupdf` reads pdf text and locates pdf tables, and is in the distribution as a
+compiled wasm wheel, so it is installed by `setup()` like `python-calamine`.
+
+`pymupdf` is the largest single thing a cold start pulls: 17.3 MB from
+`cdn.jsdelivr.net/pyodide/v314.0.6/full/`, measured at 2.2 s of the 9.8 s `setup()` takes
+against a local server. The CDN serves it with `cache-control: public, max-age=31536000`,
+so a returning visitor with a warm HTTP cache pays nothing. `pypdf` would vendor as pure
+python at a fraction of that, and has no table extraction at all.
+
 ## Spreadsheet fixtures
 
 ```bash
@@ -105,6 +118,25 @@ Writes `fixture_measurements.xlsx`, `fixture_workbook.xlsx`, `fixture_merged_hea
 diff says nothing about what a test asserts against; the script is the readable copy.
 `fixture_measurements.xlsx` holds the same table as `fixture_measurements.csv`, which is
 what lets `kernel-api.mjs` assert that a sheet and a CSV of one table profile alike.
+
+## Document fixtures
+
+```bash
+./.venv/Scripts/python.exe scripts/make_doc_fixtures.py
+```
+
+Writes thirteen files into `contents/`: a clean docx, pptx and pdf, one of each with no
+table, one of each truncated, three mislabelled copies and one file that is no document at
+all. `fixture_protocol.docx` and `fixture_overview.pptx` carry the same reading table, which
+is what lets `kernel-api.mjs` assert that one table profiles alike whatever carried it.
+
+Two details the fixtures encode rather than assume. A truncated zip loses the central
+directory at its end, so a third of a docx no longer opens; MuPDF rebuilds a damaged
+cross-reference table instead, and a third of a pdf still yields two pages, so
+`fixture_corrupt.pdf` is the header line alone. And a pdf table is reconstructed from where
+the glyphs sit: an underscore sits far enough below the other characters that `sensor_id`
+comes back as `sensor id` and a second line holding `_`, so the pdf fixture spells that
+column with a space and the brief tells the model to read column names out of the profile.
 
 ## Serve
 
@@ -141,10 +173,11 @@ BASE="http://127.0.0.1:8904/ai-playground/_output" node tests/run.mjs
 ```
 
 `tests/offline.mjs` aborts every request to `pypi.org` and `files.pythonhosted.org` in
-the browser, then asserts the kernel boots, `oold_agent.setup()` completes and
-`oold.validation.formats` imports with its checkers backed by the vendored packages. Its
-last test installs a package that is vendored nowhere and requires that to fail: without
-that control, a block that never reached micropip would look like a pass.
+the browser, then asserts the kernel boots, `oold_agent.setup()` completes,
+`oold.validation.formats` imports with its checkers backed by the vendored packages, and a
+spreadsheet, a docx, a pptx and a pdf all parse. Its last test installs a package that is
+vendored nowhere and requires that to fail: without that control, a block that never
+reached micropip would look like a pass.
 
 ```bash
 node tests/offline.mjs
@@ -231,11 +264,11 @@ and none of them reaches a model provider.
 
 ```bash
 node tests/run.mjs          # 22 checks
-node tests/offline.mjs      # 60 checks
-node tests/kernel-api.mjs   # 138 checks
+node tests/offline.mjs      # 79 checks
+node tests/kernel-api.mjs   # 236 checks
 node tests/providers.mjs    # 49 checks
 node tests/git.mjs          # 54 checks
-node tests/agent-loop.mjs   # 54 checks
+node tests/agent-loop.mjs   # 59 checks
 ```
 
 `agent-loop.mjs` starts `tests/fixtures/llm_stub.py` on port 8921 and registers it as a

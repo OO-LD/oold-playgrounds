@@ -24,6 +24,12 @@ pip
 openpyxl
 xlwt
 
+# scripts/make_doc_fixtures.py writes the document fixtures with the same libraries the
+# kernel reads them back with, so a fixture cannot encode something no reader produces.
+python-docx
+python-pptx
+pymupdf
+
 # Pinned exactly. jupyterlite-ai is young, its provider configuration is read
 # from docs rather than from a stable reference, and the plugin ids the test
 # suite asserts on move between releases. Bump deliberately, then re-run

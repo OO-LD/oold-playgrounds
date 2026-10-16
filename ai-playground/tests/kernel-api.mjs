@@ -179,6 +179,19 @@ for _n in (
     "fixture_merged_header.xlsx",
     "fixture_legacy.xls",
     "fixture_corrupt.xlsx",
+    "fixture_protocol.docx",
+    "fixture_notes.docx",
+    "fixture_corrupt.docx",
+    "fixture_mislabelled.docx",
+    "fixture_not_a.docx",
+    "fixture_overview.pptx",
+    "fixture_plain.pptx",
+    "fixture_corrupt.pptx",
+    "fixture_mislabelled.pptx",
+    "fixture_report.pdf",
+    "fixture_notes.pdf",
+    "fixture_corrupt.pdf",
+    "fixture_mislabelled.pdf",
 ):
     print(("DRIVE OK " if os.path.exists(_n) else "DRIVE MISSING ") + _n)
 `
@@ -198,6 +211,19 @@ for (const name of [
   "fixture_merged_header.xlsx",
   "fixture_legacy.xls",
   "fixture_corrupt.xlsx",
+  "fixture_protocol.docx",
+  "fixture_notes.docx",
+  "fixture_corrupt.docx",
+  "fixture_mislabelled.docx",
+  "fixture_not_a.docx",
+  "fixture_overview.pptx",
+  "fixture_plain.pptx",
+  "fixture_corrupt.pptx",
+  "fixture_mislabelled.pptx",
+  "fixture_report.pdf",
+  "fixture_notes.pdf",
+  "fixture_corrupt.pdf",
+  "fixture_mislabelled.pdf",
 ]) {
   expectLine("drive", drive, `DRIVE OK ${name}`);
 }
@@ -557,8 +583,233 @@ expectLine("a corrupt workbook does not raise", xlsx, "XL8 reason could not be r
 expectLine("a missing workbook does not raise", xlsx, "XL9 ok False");
 expectLine("a missing workbook does not raise", xlsx, "XL9 reason could not be read");
 
-// -------------------------------------------------------------------- 8. rdf
-section("TEST 8: to_rdf, from_rdf, graph, terms");
+// ---------------------------------------------------------------- 8. documents
+section("TEST 8: tables, doc_profile and doc_text");
+const docs = await run(
+  "docs",
+  `${preamble}
+t = oold_agent.tables("fixture_protocol.docx")
+print("DT1 ok " + str(t["ok"]))
+print("DT1 format " + str(t["format"]))
+print("DT1 tables " + ",".join(e["where"] for e in t["tables"]))
+print("DT1 sizes " + ",".join(str(e["rows"]) + "x" + str(e["columns"]) for e in t["tables"]))
+print("DT1 problems " + str(len(t["problems"])))
+
+d = oold_agent.doc_profile("fixture_protocol.docx")
+print("DX1 returned " + type(d).__name__)
+print("DX1 ok " + str(d["ok"]))
+print("DX1 format " + str(d["format"]))
+print("DX1 table " + str(d["table"]) + " where " + str(d["where"]))
+print("DX1 rows " + str(d["rows"]))
+print("DX1 columns " + ",".join(c["name"] for c in d["columns"]))
+print("DX1 types " + ",".join(c["type"] for c in d["columns"]))
+print("DX1 nulls " + ",".join(str(c["nulls"]) for c in d["columns"]))
+print("DX1 distinct " + ",".join(str(c["distinct"]) for c in d["columns"]))
+print("DX1 examples value " + ",".join(d["columns"][1]["examples"]))
+print("DX1 identifier " + str(d["identifier"]))
+print("DX1 problems " + " | ".join(d["problems"]))
+
+second = oold_agent.doc_profile("fixture_protocol.docx", table=1)
+print("DX2 ok " + str(second["ok"]) + " where " + str(second["where"]))
+print("DX2 columns " + ",".join(c["name"] for c in second["columns"]))
+print("DX2 examples term " + ",".join(second["columns"][0]["examples"]))
+print("DX2 problems " + str(len(second["problems"])))
+print("DX2 last " + str(oold_agent.doc_profile("fixture_protocol.docx", table=-1)["where"]))
+bad = oold_agent.doc_profile("fixture_protocol.docx", table=5)
+print("DX3 ok " + str(bad["ok"]) + " table " + str(bad["table"]))
+print("DX3 problems " + " | ".join(bad["problems"]))
+named = oold_agent.doc_profile("fixture_protocol.docx", table="table 1")
+print("DX4 problems " + " | ".join(named["problems"]))
+
+x = oold_agent.doc_text("fixture_protocol.docx")
+print("TX1 ok " + str(x["ok"]))
+print("TX1 format " + str(x["format"]))
+print("TX1 headings " + " | ".join(x["headings"]))
+print("TX1 blocks " + ",".join(b["where"] for b in x["blocks"]))
+print("TX1 chars " + str(x["chars"]) + " joined " + str(x["chars"] == len(x["text"])))
+print("TX1 dictionary " + str("unit is the unit of the reading" in x["text"]))
+print("TX1 problems " + str(len(x["problems"])))
+cut = oold_agent.doc_text("fixture_protocol.docx", max_chars=60)
+print("TX2 ok " + str(cut["ok"]) + " blocks " + str(len(cut["blocks"])) + " chars " + str(cut["chars"]))
+print("TX2 problems " + " | ".join(cut["problems"]))
+
+p = oold_agent.doc_profile("fixture_overview.pptx")
+print("PP1 ok " + str(p["ok"]))
+print("PP1 format " + str(p["format"]))
+print("PP1 where " + str(p["where"]))
+print("PP1 columns " + ",".join(c["name"] for c in p["columns"]))
+print("PP1 types " + ",".join(c["type"] for c in p["columns"]))
+print("PP1 identifier " + str(p["identifier"]))
+print("PP1 problems " + str(len(p["problems"])))
+_keys = ("name", "type", "examples", "nulls", "distinct", "unique")
+_shape = lambda prof: [{k: c[k] for k in _keys} for c in prof["columns"]]
+print("PP1 same as docx " + str(_shape(p) == _shape(d)))
+pt = oold_agent.doc_text("fixture_overview.pptx")
+print("PP2 headings " + " | ".join(pt["headings"]))
+print("PP2 blocks " + ",".join(b["where"] for b in pt["blocks"]))
+print("PP2 slide2 " + pt["blocks"][1]["text"].replace("\\n", " / "))
+
+r = oold_agent.doc_profile("fixture_report.pdf")
+print("PF1 ok " + str(r["ok"]))
+print("PF1 format " + str(r["format"]))
+print("PF1 where " + str(r["where"]))
+print("PF1 columns " + ",".join(c["name"] for c in r["columns"]))
+print("PF1 types " + ",".join(c["type"] for c in r["columns"]))
+print("PF1 identifier " + str(r["identifier"]))
+print("PF1 problems " + str(len(r["problems"])))
+rt = oold_agent.doc_text("fixture_report.pdf")
+print("PF2 headings " + " | ".join(rt["headings"]))
+print("PF2 blocks " + ",".join(b["where"] for b in rt["blocks"]))
+print("PF2 method " + str("read once per day at 08:00" in rt["text"]))
+
+for _name in ("fixture_notes.docx", "fixture_plain.pptx", "fixture_notes.pdf"):
+    _t = oold_agent.tables(_name)
+    _p = oold_agent.doc_profile(_name)
+    _x = oold_agent.doc_text(_name)
+    print("NT " + _name + " tables " + str(_t["ok"]) + " " + str(len(_t["tables"])) + " " + " | ".join(_t["problems"]))
+    print("NT " + _name + " profile " + str(_p["ok"]) + " columns " + str(len(_p["columns"])))
+    print("NT " + _name + " text " + str(_x["ok"]) + " blocks " + str(len(_x["blocks"])))
+
+for _name in ("fixture_corrupt.docx", "fixture_corrupt.pptx", "fixture_corrupt.pdf"):
+    _p = oold_agent.doc_profile(_name)
+    _x = oold_agent.doc_text(_name)
+    print("CO " + _name + " returned " + type(_p).__name__ + " ok " + str(_p["ok"]) + " format " + str(_p["format"]))
+    print("CO " + _name + " reason " + _p["problems"][0].split(":")[0])
+    print("CO " + _name + " text ok " + str(_x["ok"]) + " chars " + str(_x["chars"]))
+
+for _name in ("fixture_mislabelled.docx", "fixture_mislabelled.pptx", "fixture_mislabelled.pdf"):
+    _p = oold_agent.doc_profile(_name)
+    print("ML " + _name + " format " + str(_p["format"]) + " ok " + str(_p["ok"]) + " columns " + str(len(_p["columns"])))
+    print("ML " + _name + " problem " + _p["problems"][0])
+
+_na = oold_agent.doc_profile("fixture_not_a.docx")
+print("WR1 ok " + str(_na["ok"]) + " format " + str(_na["format"]))
+print("WR1 problem " + _na["problems"][0])
+_sheet = oold_agent.doc_profile("fixture_measurements.xlsx")
+print("WR2 ok " + str(_sheet["ok"]) + " format " + str(_sheet["format"]))
+print("WR2 problem " + _sheet["problems"][0])
+_gone = oold_agent.doc_text("fixture_nope.docx")
+print("WR3 ok " + str(_gone["ok"]) + " reason " + _gone["problems"][0].split(":")[0])
+`
+);
+console.log(docs.stdout);
+if (docs.errors.length) console.log(docs.errors.join("\n").slice(0, 3000));
+cellOk("docs", docs);
+expectLine("tables lists every table in reading order", docs, "DT1 ok True");
+expectLine("tables names the format it read", docs, "DT1 format docx");
+expectLine("tables names where each one sits", docs, "DT1 tables table 1,table 2");
+expectLine("tables sizes each one before it is profiled", docs, "DT1 sizes 3x3,3x2");
+expectLine("tables positive has no problems", docs, "DT1 problems 0");
+expectLine("doc_profile returns data", docs, "DX1 returned dict");
+expectLine("doc_profile names the format", docs, "DX1 format docx");
+expectLine("doc_profile names the table it read", docs, "DX1 table 0 where table 1");
+expectLine("doc_profile counts the body rows", docs, "DX1 rows 3");
+expectLine("doc_profile names the columns", docs, "DX1 columns sensor_id,value,unit");
+expectLine("doc_profile infers types from cell text", docs, "DX1 types string,number,string");
+expectLine("doc_profile counts nulls", docs, "DX1 nulls 0,0,0");
+expectLine("doc_profile counts distinct values", docs, "DX1 distinct 3,3,1");
+expectLine("doc_profile carries example values", docs, "DX1 examples value 20.25,21.5,22");
+expectLine("doc_profile guesses the identifier", docs, "DX1 identifier sensor_id");
+// Several tables are answered the way several sheets are: list them all, profile the
+// first, say so. ok is false because the caller still has a choice to make.
+expectLine("a document with several tables profiles one", docs, "DX1 ok False");
+expectLine(
+  "the table it chose is stated, not taken silently",
+  docs,
+  "DX1 problems document has 2 tables (0 at table 1, 1 at table 2); profiled table 0. Pass table= to profile another."
+);
+expectLine("naming a table answers the question", docs, "DX2 ok True where table 2");
+expectLine("a named table is the one profiled", docs, "DX2 columns term,meaning");
+expectLine("a data dictionary profiles like any other table", docs, "DX2 examples term sensor_id,unit,value");
+expectLine("a named table raises no table problem", docs, "DX2 problems 0");
+expectLine("table= counts from the end as well", docs, "DX2 last table 2");
+expectLine("an index past the end is data, not an exception", docs, "DX3 ok False table None");
+expectLine("an index past the end says how many there are", docs, "DX3 problems no table at index 5: the document has 2");
+expectLine(
+  "a table name is refused, because a document has none",
+  docs,
+  "DX4 problems table= takes an index, not 'table 1': the document has 2 tables"
+);
+expectLine("doc_text positive", docs, "TX1 ok True");
+expectLine("doc_text names the format", docs, "TX1 format docx");
+expectLine("doc_text returns the outline", docs, "TX1 headings Measurement protocol | Method | Readings | Data dictionary");
+expectLine("doc_text locates every block", docs, "TX1 blocks paragraph 1,paragraph 2,paragraph 3,paragraph 4,paragraph 5,paragraph 6");
+expectLine("text is the blocks joined, and chars counts it", docs, "TX1 chars 311 joined True");
+// What a column means is written next to the table, not in it, so the prose has to
+// come back whole rather than as a heading list.
+expectLine("doc_text returns the data dictionary prose", docs, "TX1 dictionary True");
+expectLine("doc_text positive has no problems", docs, "TX1 problems 0");
+expectLine("max_chars stops reading and says so", docs, "TX2 ok False blocks 2 chars 311");
+expectLine(
+  "max_chars reports the whole length, not the kept one",
+  docs,
+  "TX2 problems only 2 of 6 blocks were read: the document is 311 characters and max_chars is 60"
+);
+expectLine("a pptx table profiles", docs, "PP1 ok True");
+expectLine("a pptx table profiles", docs, "PP1 format pptx");
+expectLine("a pptx table is located by its slide", docs, "PP1 where slide 3");
+expectLine("a pptx table profiles", docs, "PP1 columns sensor_id,value,unit");
+expectLine("a pptx table profiles", docs, "PP1 types string,number,string");
+expectLine("a pptx table profiles", docs, "PP1 identifier sensor_id");
+expectLine("a pptx table positive has no problems", docs, "PP1 problems 0");
+// The docx and the pptx carry the same table, so the agent reads one shape either way.
+expectLine("one table profiles alike whatever carried it", docs, "PP1 same as docx True");
+expectLine("pptx headings are the slide titles", docs, "PP2 headings Sensor overview | Method | Readings");
+expectLine("pptx text is located by slide", docs, "PP2 blocks slide 1,slide 2,slide 3");
+expectLine("a slide keeps its lines", docs, "PP2 slide2 Method / One reading per sensor per day / Values in degC");
+expectLine("a pdf table profiles", docs, "PF1 ok True");
+expectLine("a pdf table profiles", docs, "PF1 format pdf");
+expectLine("a pdf table is located by its page", docs, "PF1 where page 2");
+expectLine("a pdf table profiles", docs, "PF1 columns sensor id,value,unit");
+expectLine("a pdf table profiles", docs, "PF1 types string,number,string");
+expectLine("a pdf table profiles", docs, "PF1 identifier sensor id");
+expectLine("a pdf table positive has no problems", docs, "PF1 problems 0");
+expectLine("pdf headings come from the bookmark tree", docs, "PF2 headings Measurement protocol | Readings");
+expectLine("pdf text is located by page", docs, "PF2 blocks page 1,page 2");
+expectLine("pdf text carries the methods section", docs, "PF2 method True");
+// A document with no table is not an error to raise, and its text still comes back.
+for (const [name, blocks] of [
+  ["fixture_notes.docx", 3],
+  ["fixture_plain.pptx", 2],
+  ["fixture_notes.pdf", 1],
+]) {
+  expectLine("a document with no tables says so", docs, `NT ${name} tables False 0 document has no tables; its text is in doc_text`);
+  expectLine("a document with no tables profiles nothing", docs, `NT ${name} profile False columns 0`);
+  expectLine("a document with no tables still has text", docs, `NT ${name} text True blocks ${blocks}`);
+}
+// A truncated zip has lost its central directory; MuPDF rebuilds a damaged pdf, so
+// only its header line survives in the fixture. Either way the answer is data.
+for (const [name, format] of [
+  ["fixture_corrupt.docx", "None"],
+  ["fixture_corrupt.pptx", "None"],
+  ["fixture_corrupt.pdf", "pdf"],
+]) {
+  expectLine("a corrupt document comes back as data", docs, `CO ${name} returned dict ok False format ${format}`);
+  expectLine("a corrupt document does not raise", docs, `CO ${name} reason could not be read`);
+  expectLine("a corrupt document yields no text", docs, `CO ${name} text ok False chars 0`);
+}
+// The suffix is checked against the bytes and never trusted for them, so a renamed
+// document is still extracted rather than handed to the wrong reader.
+for (const [name, suffix, format] of [
+  ["fixture_mislabelled.docx", "docx", "pdf"],
+  ["fixture_mislabelled.pptx", "pptx", "docx"],
+  ["fixture_mislabelled.pdf", "pdf", "pptx"],
+]) {
+  expectLine("a wrong suffix does not stop the extraction", docs, `ML ${name} format ${format} ok False columns 3`);
+  expectLine("a wrong suffix is reported", docs, `ML ${name} problem suffix says ${suffix} and the bytes say ${format}; read as ${format}`);
+}
+expectLine("a file that is no document at all is data", docs, "WR1 ok False format None");
+expectLine("a file that is no document at all says what it saw", docs, "WR1 problem not a docx, pptx or pdf: the file starts with b'take'");
+expectLine("a spreadsheet is turned away, not parsed", docs, "WR2 ok False format None");
+expectLine(
+  "a spreadsheet is sent to the function that reads it",
+  docs,
+  "WR2 problem this is a spreadsheet, not a document: read it with xlsx_profile or sheets"
+);
+expectLine("a missing document does not raise", docs, "WR3 ok False reason could not be read");
+
+// -------------------------------------------------------------------- 9. rdf
+section("TEST 9: to_rdf, from_rdf, graph, terms");
 const rdf = await run(
   "rdf",
   `${preamble}
@@ -627,7 +878,7 @@ expectLine(
 expectLine("from_rdf positive", rdf, 'ROUND1 {"id": "ex:m-001", "sensor_id": "S-11", "unit": "degC", "value": 21.5}');
 expectLine("from_rdf negative", rdf, "ROUND2 keys |");
 
-// ------------------------------------------------------------ 9. diagnostics
+// ----------------------------------------------------------- 10. diagnostics
 section("DIAGNOSTICS");
 console.log(`pageerror count: ${pageErrors.length}`);
 pageErrors.forEach((e) => console.log("  " + e.slice(0, 300)));

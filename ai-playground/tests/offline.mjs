@@ -296,8 +296,63 @@ expectLine("a workbook written offline reads back", spreadsheet, "WRITTEN types 
 // The negative of the same question: the reader has to reject a file that is not one.
 expectLine("a corrupt workbook is still a problem, not a parse", spreadsheet, "CORRUPT ok False could not be read");
 
-// ------------------------------------------- 5. where the packages came from
-section("TEST 5: nothing was fetched from PyPI");
+// --------------------------------------------------------------- 5. documents
+section("TEST 5: a docx, a pptx and a pdf parse, with PyPI blocked");
+// python-docx and python-pptx are pure python, are in no distribution and are vendored
+// into the site; XlsxWriter is here because python-pptx requires it and micropip resolves
+// the whole dependency set or none of it. pymupdf is a compiled wasm wheel and can only
+// come from the Pyodide distribution. This cell is the only thing that tells the two
+// apart from a run with the network up.
+const documents = await run(
+  "documents",
+  `
+import oold_agent
+_d = oold_agent.doc_profile("fixture_protocol.docx", table=1)
+print("DOCX ok " + str(_d["ok"]) + " format " + str(_d["format"]))
+print("DOCX columns " + ",".join(_c["name"] for _c in _d["columns"]))
+print("DOCX text " + str("unit is the unit of the reading" in oold_agent.doc_text("fixture_protocol.docx")["text"]))
+
+_p = oold_agent.doc_profile("fixture_overview.pptx")
+print("PPTX ok " + str(_p["ok"]) + " format " + str(_p["format"]) + " where " + str(_p["where"]))
+print("PPTX columns " + ",".join(_c["name"] for _c in _p["columns"]))
+print("PPTX headings " + " | ".join(oold_agent.doc_text("fixture_overview.pptx")["headings"]))
+
+_r = oold_agent.doc_profile("fixture_report.pdf")
+print("PDF ok " + str(_r["ok"]) + " format " + str(_r["format"]) + " where " + str(_r["where"]))
+print("PDF columns " + ",".join(_c["name"] for _c in _r["columns"]))
+print("PDF types " + ",".join(_c["type"] for _c in _r["columns"]))
+
+import docx, pptx, pymupdf, xlsxwriter
+print("DOCX file " + docx.__file__)
+print("PPTX file " + pptx.__file__)
+print("XLSXWRITER file " + xlsxwriter.__file__)
+print("PYMUPDF file " + pymupdf.__file__)
+
+_bad = oold_agent.doc_profile("fixture_corrupt.docx")
+print("CORRUPT ok " + str(_bad["ok"]) + " " + _bad["problems"][0].split(":")[0])
+`
+);
+console.log(documents.stdout);
+if (documents.errors.length) console.log(documents.errors.join("\n").slice(0, 3000));
+cellOk("documents", documents);
+expectLine("doc_profile reads a docx offline", documents, "DOCX ok True format docx");
+expectLine("doc_profile reads a docx offline", documents, "DOCX columns term,meaning");
+expectLine("doc_text reads a docx offline", documents, "DOCX text True");
+expectLine("doc_profile reads a pptx offline", documents, "PPTX ok True format pptx where slide 3");
+expectLine("doc_profile reads a pptx offline", documents, "PPTX columns sensor_id,value,unit");
+expectLine("doc_text reads a pptx offline", documents, "PPTX headings Sensor overview | Method | Readings");
+expectLine("doc_profile reads a pdf offline", documents, "PDF ok True format pdf where page 2");
+expectLine("doc_profile reads a pdf offline", documents, "PDF columns sensor id,value,unit");
+expectLine("doc_profile infers types from a pdf table offline", documents, "PDF types string,number,string");
+expectLine("python-docx came from the site, not from PyPI", documents, "DOCX file /lib/python3.14/site-packages/docx/__init__.py");
+expectLine("python-pptx came from the site, not from PyPI", documents, "PPTX file /lib/python3.14/site-packages/pptx/__init__.py");
+expectLine("XlsxWriter came from the site, not from PyPI", documents, "XLSXWRITER file /lib/python3.14/site-packages/xlsxwriter/__init__.py");
+expectLine("pymupdf came from the Pyodide distribution", documents, "PYMUPDF file /lib/python3.14/site-packages/pymupdf/__init__.py");
+// The negative of the same question: the reader has to reject a file that is not one.
+expectLine("a corrupt document is still a problem, not a parse", documents, "CORRUPT ok False could not be read");
+
+// ------------------------------------------- 6. where the packages came from
+section("TEST 6: nothing was fetched from PyPI");
 const origins = await run(
   "origins",
   `
@@ -305,7 +360,8 @@ import importlib.metadata as _md
 for _name in ("oold", "rdflib", "pyld", "SPARQLWrapper", "jsondiff", "datamodel-code-generator",
               "fqdn", "isoduration", "rfc3339-validator", "rfc3986-validator", "rfc3987-syntax",
               "uri-template", "webcolors", "jsonschema", "referencing", "click", "typing-extensions",
-              "python-calamine", "openpyxl", "et-xmlfile"):
+              "python-calamine", "openpyxl", "et-xmlfile", "python-docx", "python-pptx",
+              "XlsxWriter", "pymupdf", "lxml", "pillow"):
     try:
         print("DIST " + _name + " " + _md.version(_name))
     except Exception as _e:
@@ -334,13 +390,17 @@ for (const name of [
   "python-calamine",
   "openpyxl",
   "et-xmlfile",
+  "python-docx",
+  "python-pptx",
+  "XlsxWriter",
+  "pymupdf",
 ]) {
   const line = lines(origins).find((l) => l.startsWith(`DIST ${name} `));
   check(`${name} is installed in the kernel`, !!line && !line.includes("MISSING"), line ?? "no DIST line");
 }
 
-// ------------------------------------------------------------- 6. the control
-section("TEST 6: control, a package that is vendored nowhere must fail to install");
+// ------------------------------------------------------------- 7. the control
+section("TEST 7: control, a package that is vendored nowhere must fail to install");
 // If this installs, the block never reached micropip and tests 2 to 4 prove nothing.
 const control = await run(
   "control",
