@@ -85,7 +85,23 @@ const watchdog = setTimeout(() => {
 }, SUITE_TIMEOUT);
 watchdog.unref();
 
-const marker = (out, line) => out.stdout.split("\n").some((l) => l.trimEnd() === line);
+const lines = (out) => out.stdout.split("\n").map((l) => l.trimEnd());
+const marker = (out, line) => lines(out).some((l) => l === line);
+
+// oold releases faster than this suite is edited, and which version imported is not what
+// it is testing. MIN_OOLD is the oldest release carrying the oold_agent surface the
+// scripted transcript drives, so a floor keeps the assertion meaningful without pinning.
+const MIN_OOLD = "2.2.0";
+
+function expectOoldVersion(out) {
+  const prefix = "SETUP oold ";
+  const line = lines(out).find((l) => l.startsWith(prefix));
+  const got = line ? line.slice(prefix.length).trim() : null;
+  const parts = (v) => (v.match(/^(\d+)\.(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
+  const [a, b] = [parts(got ?? ""), parts(MIN_OOLD)];
+  const ok = a.length === 3 && (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) >= 0;
+  check(`oold >= ${MIN_OOLD} in the notebook kernel`, ok, got === null ? "no SETUP oold line" : `got ${got}`);
+}
 
 // --------------------------------------------------------------- stub helpers
 
@@ -259,7 +275,7 @@ print("SETUP nonce " + OOLD_LOOP_NONCE)
 console.log(setup.stdout);
 if (setup.errors.length) console.log(setup.errors.join("\n").slice(0, 2000));
 check("setup cell raised nothing", setup.errors.length === 0, setup.errors.join(" ").slice(0, 300));
-check("oold installed in the notebook kernel", marker(setup, "SETUP oold 2.2.0"), `status=${setup.status}`);
+expectOoldVersion(setup);
 check("validation extra imported", marker(setup, "SETUP validation True"), "");
 check("the nonce is in the kernel the agent will reach", marker(setup, `SETUP nonce ${NONCE}`), NONCE);
 if (!marker(setup, "SETUP validation True")) {

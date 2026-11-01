@@ -72,6 +72,27 @@ function nearest(out, line) {
   return candidates.length ? `got: ${candidates.map((c) => JSON.stringify(c)).join(" | ").slice(0, 400)}` : "no line with that prefix";
 }
 
+// oold releases faster than these suites are edited, and which version imported is not
+// what any of them is testing. MIN_OOLD is the oldest release carrying the oold_agent
+// surface they drive, so a floor keeps the assertion meaningful without pinning.
+const MIN_OOLD = "2.2.0";
+
+// oold_agent.PDF_TABLE_HINT, duplicated so a reworded hint fails here rather than quietly
+// stopping the agent from being told what to do with a pdf.
+const PDF_TABLE_HINT =
+  "pdf tables are not detected: pypdf reads text only. A table's rows are in doc_text, " +
+  "laid out as the page lays them out; read the columns off that.";
+
+function expectOoldVersion(out) {
+  const prefix = "SETUP oold ";
+  const line = lines(out).find((l) => l.startsWith(prefix));
+  const got = line ? line.slice(prefix.length).trim() : null;
+  const parts = (v) => (v.match(/^(\d+)\.(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
+  const [a, b] = [parts(got ?? ""), parts(MIN_OOLD)];
+  const ok = a.length === 3 && (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) >= 0;
+  check(`setup: oold >= ${MIN_OOLD}`, ok, got === null ? "no SETUP oold line" : `got ${got}`);
+}
+
 const browser = await chromium.launch({ headless: HEADLESS });
 const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
 const page = await context.newPage();
@@ -260,7 +281,7 @@ console.log(setup.stdout);
 if (setup.errors.length) console.log(setup.errors.join("\n").slice(0, 3000));
 report.timings.setupMs = Date.now() - tSetup;
 cellOk("setup", setup);
-expectLine("setup", setup, "SETUP oold 2.2.0");
+expectOoldVersion(setup);
 expectLine("setup", setup, "SETUP validation True");
 expectLine("setup", setup, "SETUP pyodide_http True");
 expectLine("setup", setup, "SETUP failed 0");
@@ -652,11 +673,11 @@ print("PP2 slide2 " + pt["blocks"][1]["text"].replace("\\n", " / "))
 r = oold_agent.doc_profile("fixture_report.pdf")
 print("PF1 ok " + str(r["ok"]))
 print("PF1 format " + str(r["format"]))
-print("PF1 where " + str(r["where"]))
-print("PF1 columns " + ",".join(c["name"] for c in r["columns"]))
-print("PF1 types " + ",".join(c["type"] for c in r["columns"]))
-print("PF1 identifier " + str(r["identifier"]))
-print("PF1 problems " + str(len(r["problems"])))
+print("PF1 sizes " + str(len(r["tables"])) + " tables " + str(len(r["columns"])) + " columns")
+print("PF1 problem " + r["problems"][0])
+rtab = oold_agent.tables("fixture_report.pdf")
+print("PF1 listed " + str(rtab["ok"]) + " " + str(len(rtab["tables"])))
+print("PF1 listed problem " + rtab["problems"][0])
 rt = oold_agent.doc_text("fixture_report.pdf")
 print("PF2 headings " + " | ".join(rt["headings"]))
 print("PF2 blocks " + ",".join(b["where"] for b in rt["blocks"]))
@@ -757,13 +778,15 @@ expectLine("one table profiles alike whatever carried it", docs, "PP1 same as do
 expectLine("pptx headings are the slide titles", docs, "PP2 headings Sensor overview | Method | Readings");
 expectLine("pptx text is located by slide", docs, "PP2 blocks slide 1,slide 2,slide 3");
 expectLine("a slide keeps its lines", docs, "PP2 slide2 Method / One reading per sensor per day / Values in degC");
-expectLine("a pdf table profiles", docs, "PF1 ok True");
-expectLine("a pdf table profiles", docs, "PF1 format pdf");
-expectLine("a pdf table is located by its page", docs, "PF1 where page 2");
-expectLine("a pdf table profiles", docs, "PF1 columns sensor id,value,unit");
-expectLine("a pdf table profiles", docs, "PF1 types string,number,string");
-expectLine("a pdf table profiles", docs, "PF1 identifier sensor id");
-expectLine("a pdf table positive has no problems", docs, "PF1 problems 0");
+// pypdf reads text and nothing else, so finding the columns in a pdf is the agent's job
+// and doc_text is where it does it. The hint is asserted word for word because it is the
+// only thing between "this pdf has no tables" and "nothing went looking".
+expectLine("a pdf profiles no table", docs, "PF1 ok False");
+expectLine("a pdf still names its format", docs, "PF1 format pdf");
+expectLine("a pdf profiles no table", docs, "PF1 sizes 0 tables 0 columns");
+expectLine("a pdf says why it has no tables", docs, `PF1 problem ${PDF_TABLE_HINT}`);
+expectLine("tables agrees with doc_profile on a pdf", docs, "PF1 listed False 0");
+expectLine("tables says why too", docs, `PF1 listed problem ${PDF_TABLE_HINT}`);
 expectLine("pdf headings come from the bookmark tree", docs, "PF2 headings Measurement protocol | Readings");
 expectLine("pdf text is located by page", docs, "PF2 blocks page 1,page 2");
 expectLine("pdf text carries the methods section", docs, "PF2 method True");
@@ -773,12 +796,14 @@ for (const [name, blocks] of [
   ["fixture_plain.pptx", 2],
   ["fixture_notes.pdf", 1],
 ]) {
-  expectLine("a document with no tables says so", docs, `NT ${name} tables False 0 document has no tables; its text is in doc_text`);
+  const why = name.endsWith(".pdf") ? PDF_TABLE_HINT : "document has no tables; its text is in doc_text";
+  expectLine("a document with no tables says so", docs, `NT ${name} tables False 0 ${why}`);
   expectLine("a document with no tables profiles nothing", docs, `NT ${name} profile False columns 0`);
   expectLine("a document with no tables still has text", docs, `NT ${name} text True blocks ${blocks}`);
 }
-// A truncated zip has lost its central directory; MuPDF rebuilds a damaged pdf, so
-// only its header line survives in the fixture. Either way the answer is data.
+// A truncated zip has lost its central directory and is not identified at all; a
+// truncated pdf still carries its header, so the format is named and the read is what
+// fails. Either way the answer is data.
 for (const [name, format] of [
   ["fixture_corrupt.docx", "None"],
   ["fixture_corrupt.pptx", "None"],
@@ -790,12 +815,12 @@ for (const [name, format] of [
 }
 // The suffix is checked against the bytes and never trusted for them, so a renamed
 // document is still extracted rather than handed to the wrong reader.
-for (const [name, suffix, format] of [
-  ["fixture_mislabelled.docx", "docx", "pdf"],
-  ["fixture_mislabelled.pptx", "pptx", "docx"],
-  ["fixture_mislabelled.pdf", "pdf", "pptx"],
+for (const [name, suffix, format, columns] of [
+  ["fixture_mislabelled.docx", "docx", "pdf", 0],
+  ["fixture_mislabelled.pptx", "pptx", "docx", 3],
+  ["fixture_mislabelled.pdf", "pdf", "pptx", 3],
 ]) {
-  expectLine("a wrong suffix does not stop the extraction", docs, `ML ${name} format ${format} ok False columns 3`);
+  expectLine("a wrong suffix does not stop the extraction", docs, `ML ${name} format ${format} ok False columns ${columns}`);
   expectLine("a wrong suffix is reported", docs, `ML ${name} problem suffix says ${suffix} and the bytes say ${format}; read as ${format}`);
 }
 expectLine("a file that is no document at all is data", docs, "WR1 ok False format None");

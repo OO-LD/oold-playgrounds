@@ -18,6 +18,22 @@ Import `oold_agent` before anything touches `oold`: it sets `OOLD_DESCRIPTOR_BIN
 import time and the binding is chosen when `oold.model` is first imported. `setup` is the
 only coroutine in the module; everything else is an ordinary call.
 
+## Installing something else
+
+`setup()` installs the readers and validators listed below from wheels shipped with the
+site, with no network. Anything beyond them you install yourself:
+
+```python
+import piplite
+await piplite.install("humanize")
+```
+
+Pure python only, unless the name is one the Pyodide distribution carries as a compiled
+wheel, which `piplite.install` picks up the same way. Everything else resolves against
+PyPI over the network, so it fails where the site is opened offline and it is slow on a
+large dependency set. Reach for it when the task needs a library, not to replace what
+`setup()` already installed.
+
 ## Command line
 
 `!oold ...` does not work. Emscripten has no subprocess. Use
@@ -66,8 +82,8 @@ you write it to disk.
   a workbook needs `openpyxl`, which `setup()` installs; it is what `DataFrame.to_excel` uses.
 - A number in a sheet is a double, so `22` and `22.0` are the same cell. The profiler renders
   it as the sheet shows it, which types a column of whole numbers `integer`.
-- `doc_profile(path, table=None)` returns that same column shape for one table of a `docx`,
-  `pptx` or `pdf`, plus `format`, `table`, `where` and `tables`. `tables(path)` lists the
+- `doc_profile(path, table=None)` returns that same column shape for one table of a `docx`
+  or a `pptx`, plus `format`, `table`, `where` and `tables`. `tables(path)` lists the
   tables alone, each with `index`, `where` it sits and its size. `table=` takes an index,
   never a name; a document has nothing to name its tables by. More than one and
   `doc_profile` takes the first and says so in `problems`.
@@ -78,8 +94,11 @@ you write it to disk.
 - The suffix is not trusted. The format is read from the bytes, and a file whose name
   disagrees is still extracted, with the mismatch in `problems`. A spreadsheet handed to
   `doc_profile` is turned away rather than parsed.
-- A pdf table is reconstructed from where the glyphs sit, so a header can come back split or
-  merged. Read the column names out of the profile; do not assume them.
+- A pdf has no table extraction: `pypdf` reads text and nothing else, so `tables` and
+  `doc_profile` come back empty for one and say so. Call `doc_text` instead and read the
+  columns off the page text yourself. That text keeps the reading order of the page, so a
+  row arrives as a line; decide the column boundaries from the header line and check them
+  against a few rows before proposing terms.
 - `to_rdf(instance, schemas)` exports under the schema chain's effective context.
 - `graph(nquads)` gives nodes and edges for a network view.
 - `terms(schemas)` renders the terms of a schema and everything it extends.

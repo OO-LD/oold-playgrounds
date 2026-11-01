@@ -12,8 +12,9 @@
 # kernel_info_reply when PyPI is unreachable.
 #
 # xlsxwriter is here for python-pptx, which requires it and is the only thing that does.
-# pymupdf, lxml and pillow are absent because the distribution carries them; pymupdf is
-# a compiled wasm wheel and could not be vendored even if it were worth the bytes.
+# lxml and pillow are absent because the distribution carries them. pymupdf is absent for a
+# different reason: it is a 17.3 MB compiled wasm wheel that could only come from the CDN,
+# so the pdf reader is pypdf, which vendors as pure python and extracts text only.
 #
 # Regenerate after changing oold_agent.REQUIREMENTS or bumping the pyodide kernel:
 #
@@ -43,6 +44,7 @@ mypy-extensions==1.1.0
 openpyxl==3.1.5
 pathspec==1.1.1
 pyld==3.3.0
+pypdf==6.20.1
 python-docx==1.2.0
 python-pptx==1.0.2
 pytokens==0.4.1

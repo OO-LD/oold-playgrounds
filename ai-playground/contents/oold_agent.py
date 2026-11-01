@@ -24,8 +24,8 @@ Four groups of entry points:
   terms: columns, inferred types, example values, how much is missing, and which column looks
   like the identifier. :func:`xlsx_profile` and :func:`sheets` answer the same questions for a
   spreadsheet, one sheet at a time, and :func:`doc_profile` and :func:`tables` answer them for
-  a table inside a docx, a pptx or a pdf. :func:`doc_text` returns the prose next to those
-  tables, which is usually what says what a column means.
+  a table inside a docx or a pptx. :func:`doc_text` returns the prose next to those tables,
+  which is usually what says what a column means, and is the only way into a pdf.
 * :func:`to_rdf`, :func:`from_rdf`, :func:`transform`, :func:`graph` and :func:`terms` carry an
   instance between schemas through RDF and render what came out. Ported from the schema
   playground (``schema_playground.transform``, ``.mappings``, ``.graph``, ``.terms``).
@@ -86,6 +86,13 @@ SETUP_HINT = "oold is not installed in this kernel yet. Run: await oold_agent.se
 CALAMINE_HINT = "python-calamine is not installed in this kernel yet. Run: await oold_agent.setup()"
 DOCUMENT_HINT = "the document readers are not installed in this kernel yet. Run: await oold_agent.setup()"
 
+#: Said whenever a pdf is asked for tables, rather than left to be inferred from an empty
+#: list, which would read as "this pdf has no tables" when the truth is that nothing looked.
+PDF_TABLE_HINT = (
+    "pdf tables are not detected: pypdf reads text only. A table's rows are in doc_text, "
+    "laid out as the page lays them out; read the columns off that."
+)
+
 #: Serializations accepted and produced.
 TURTLE = "text/turtle"
 JSON_LD = "application/ld+json"
@@ -103,18 +110,18 @@ _RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 #: ``Draft202012Validator.FORMAT_CHECKER`` at import time and raises KeyError on any that
 #: the backing package never registered.
 #:
-#: ``python-calamine`` and ``pymupdf`` are compiled wheels from the Pyodide distribution and
-#: are installed rather than imported, for the same reason ``pyodide-http`` is: the kernel
-#: loads a distribution package only when the literal import appears in the cell source it is
-#: about to run, and the imports in :func:`_workbook` and :func:`_pdf_content` are invisible
-#: to that scan. ``openpyxl``, ``python-docx`` and ``python-pptx`` are in no distribution, are
-#: pure python and are vendored into the site. ``openpyxl`` is the only xlsx writer available
-#: and ``DataFrame.to_excel`` fails without it.
+#: ``python-calamine`` is a compiled wheel from the Pyodide distribution and is installed
+#: rather than imported, for the same reason ``pyodide-http`` is: the kernel loads a
+#: distribution package only when the literal import appears in the cell source it is about
+#: to run, and the import in :func:`_workbook` is invisible to that scan. ``openpyxl``,
+#: ``pypdf``, ``python-docx`` and ``python-pptx`` are in no distribution, are pure python and
+#: are vendored into the site. ``openpyxl`` is the only xlsx writer available and
+#: ``DataFrame.to_excel`` fails without it.
 #:
-#: ``pymupdf`` is the largest single thing a cold start pulls: 17.3 MB from the CDN, 2.2 s
-#: of the 9.8 s :func:`setup` takes against a local server, and nothing on a second visit
-#: because the CDN serves it with a year of cache. It reads pdf text and locates tables in
-#: one package; ``pypdf`` would vendor as pure python and has no table extraction at all.
+#: ``pypdf`` reads pdf text and nothing else. ``pymupdf`` locates tables too, but is a 17.3 MB
+#: compiled wheel that can only come from the CDN, which is a cold start the whole vendored
+#: set otherwise avoids. Column detection is the agent's job here, and it does it from the
+#: page text; see :data:`PDF_TABLE_HINT`, which every pdf read says out loud.
 REQUIREMENTS = (
     "jsonschema>=4.25",
     "referencing>=0.30",
@@ -130,7 +137,7 @@ REQUIREMENTS = (
     "webcolors>=24.6.0",
     "python-calamine",
     "openpyxl",
-    "pymupdf",
+    "pypdf",
     "python-docx",
     "python-pptx",
 )
@@ -938,35 +945,45 @@ def _pptx_content(path: Any, problems: list[str]):
     return grids, blocks, headings
 
 
-def _pdf_content(path: Any, problems: list[str]):
-    import pymupdf
+def _outline_titles(outline: Any) -> list[str]:
+    """Flatten the outline. pypdf nests a sub-outline as a list inside its parent list."""
+    found: list[str] = []
+    for entry in outline or ():
+        if isinstance(entry, list):
+            found.extend(_outline_titles(entry))
+            continue
+        title = _readable(str(getattr(entry, "title", "") or ""))
+        if title:
+            found.append(title)
+    return found
 
-    grids: list[tuple[str, list[list[str]]]] = []
+
+def _pdf_content(path: Any, problems: list[str]):
+    from pypdf import PdfReader
+
     blocks: list[dict[str, str]] = []
     headings: list[str] = []
-    with pymupdf.open(str(path)) as document:
+    reader = PdfReader(str(path))
+    try:
+        headings = _outline_titles(reader.outline)
+    except Exception as exc:
+        problems.append(f"outline could not be read: {type(exc).__name__}: {exc}")
+    for number, page in enumerate(reader.pages, start=1):
+        where = f"page {number}"
         try:
-            headings = [str(entry[1]) for entry in document.get_toc()]
+            text = _readable(page.extract_text())
         except Exception as exc:
-            problems.append(f"outline could not be read: {type(exc).__name__}: {exc}")
-        for number, page in enumerate(document, start=1):
-            where = f"page {number}"
-            text = _readable(page.get_text())
-            if text:
-                blocks.append({"where": where, "text": text})
-            try:
-                found = page.find_tables()
-            except Exception as exc:
-                problems.append(f"{where}: tables could not be located: {type(exc).__name__}: {exc}")
-                continue
-            for table in found.tables:
-                grids.append((where, [[_cell_line(cell) for cell in row] for row in table.extract()]))
-    return grids, blocks, headings
+            problems.append(f"{where}: text could not be read: {type(exc).__name__}: {exc}")
+            continue
+        if text:
+            blocks.append({"where": where, "text": text})
+    return [], blocks, headings
 
 
 #: One reader per format, each ``(path, problems) -> (grids, blocks, headings)``. Only the
-#: pdf reader has a partial failure to report: an outline or a page of tables can be
-#: unreadable while the rest of the document is fine. The other two read or raise.
+#: pdf reader has a partial failure to report: an outline or a single page can be unreadable
+#: while the rest of the document is fine. The other two read or raise. The pdf reader also
+#: returns no grids at all, by construction rather than by failure.
 _DOCUMENT_READERS = {"docx": _docx_content, "pptx": _pptx_content, "pdf": _pdf_content}
 
 
@@ -1021,12 +1038,15 @@ def _pick_table(table: Any, entries: list[dict[str, Any]], problems: list[str]) 
 
 
 def tables(path: Any) -> dict[str, Any]:
-    """Tables of a docx, a pptx or a pdf, in reading order.
+    """Tables of a docx or a pptx, in reading order.
 
     Returns ``{"path", "ok", "format", "tables", "problems"}``. Each entry carries its
-    ``index``, ``where`` it sits (``table 2``, ``slide 3``, ``page 2``) and its ``rows``
-    and ``columns`` counts, so "which table" can be answered before one is profiled.
+    ``index``, ``where`` it sits (``table 2``, ``slide 3``) and its ``rows`` and
+    ``columns`` counts, so "which table" can be answered before one is profiled.
     Never raises; this is the document counterpart of :func:`sheets`.
+
+    A pdf always comes back with none and :data:`PDF_TABLE_HINT` in ``problems``, because
+    ``pypdf`` reads text only. :func:`doc_text` is the way into one.
     """
     profile: dict[str, Any] = {
         "path": str(path),
@@ -1045,7 +1065,7 @@ def tables(path: Any) -> dict[str, Any]:
     grids, _, _ = content
     profile["tables"] = _table_entries(grids)
     if not grids:
-        problems.append("document has no tables; its text is in doc_text")
+        problems.append(PDF_TABLE_HINT if found == "pdf" else "document has no tables; its text is in doc_text")
         return profile
     profile["ok"] = not problems
     return profile
@@ -1064,6 +1084,8 @@ def doc_profile(
     tables by. Without it the first is profiled and a document with more than one says so
     in ``problems``. Nothing raises: a file that is not the format its suffix claims comes
     back with ``ok`` false and the reason in ``problems``.
+
+    A pdf has no tables to profile; see :func:`tables`.
     """
     profile: dict[str, Any] = {
         "path": str(path),
@@ -1088,7 +1110,7 @@ def doc_profile(
     entries = _table_entries(grids)
     profile["tables"] = entries
     if not entries:
-        problems.append("document has no tables; its text is in doc_text")
+        problems.append(PDF_TABLE_HINT if found == "pdf" else "document has no tables; its text is in doc_text")
         return profile
 
     chosen = _pick_table(table, entries, problems)
@@ -1144,7 +1166,8 @@ def doc_text(path: Any, max_chars: int = 20000) -> dict[str, Any]:
     when ``max_chars`` cut it short.
 
     What a column means is usually written next to the table rather than in it, so this is
-    the half of an extraction that :func:`doc_profile` does not answer. Never raises.
+    the half of an extraction that :func:`doc_profile` does not answer, and for a pdf it is
+    the whole of it. Never raises.
     """
     profile: dict[str, Any] = {
         "path": str(path),

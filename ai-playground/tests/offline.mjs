@@ -70,6 +70,21 @@ function expectLine(name, out, line) {
   check(`${name}: "${line}"`, ok, ok ? "" : `lines: ${JSON.stringify(lines(out).slice(0, 12))}`);
 }
 
+// oold releases faster than these suites are edited, and which version imported is not
+// what any of them is testing. MIN_OOLD is the oldest release carrying the oold_agent
+// surface they drive, so a floor keeps the assertion meaningful without pinning.
+const MIN_OOLD = "2.2.0";
+
+function expectOoldVersion(out) {
+  const prefix = "SETUP oold ";
+  const line = lines(out).find((l) => l.startsWith(prefix));
+  const got = line ? line.slice(prefix.length).trim() : null;
+  const parts = (v) => (v.match(/^(\d+)\.(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
+  const [a, b] = [parts(got ?? ""), parts(MIN_OOLD)];
+  const ok = a.length === 3 && (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) >= 0;
+  check(`setup: oold >= ${MIN_OOLD}`, ok, got === null ? "no SETUP oold line" : `got ${got}`);
+}
+
 const browser = await chromium.launch({ headless: HEADLESS });
 const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
 
@@ -180,7 +195,7 @@ if (setup.errors.length) console.log(setup.errors.join("\n").slice(0, 3000));
 report.timings.setupMs = Date.now() - tSetup;
 console.log(`setup took ${report.timings.setupMs} ms`);
 cellOk("setup", setup);
-expectLine("setup", setup, "SETUP oold 2.2.0");
+expectOoldVersion(setup);
 expectLine("setup", setup, "SETUP validation True");
 expectLine("setup", setup, "SETUP pyodide_http True");
 expectLine("setup", setup, "SETUP failed 0");
@@ -298,11 +313,10 @@ expectLine("a corrupt workbook is still a problem, not a parse", spreadsheet, "C
 
 // --------------------------------------------------------------- 5. documents
 section("TEST 5: a docx, a pptx and a pdf parse, with PyPI blocked");
-// python-docx and python-pptx are pure python, are in no distribution and are vendored
-// into the site; XlsxWriter is here because python-pptx requires it and micropip resolves
-// the whole dependency set or none of it. pymupdf is a compiled wasm wheel and can only
-// come from the Pyodide distribution. This cell is the only thing that tells the two
-// apart from a run with the network up.
+// python-docx, python-pptx and pypdf are pure python, are in no distribution and are
+// vendored into the site; XlsxWriter is here because python-pptx requires it and micropip
+// resolves the whole dependency set or none of it. With PyPI blocked, a reader that was
+// never staged fails here rather than on a visitor's first pdf.
 const documents = await run(
   "documents",
   `
@@ -317,16 +331,16 @@ print("PPTX ok " + str(_p["ok"]) + " format " + str(_p["format"]) + " where " + 
 print("PPTX columns " + ",".join(_c["name"] for _c in _p["columns"]))
 print("PPTX headings " + " | ".join(oold_agent.doc_text("fixture_overview.pptx")["headings"]))
 
-_r = oold_agent.doc_profile("fixture_report.pdf")
-print("PDF ok " + str(_r["ok"]) + " format " + str(_r["format"]) + " where " + str(_r["where"]))
-print("PDF columns " + ",".join(_c["name"] for _c in _r["columns"]))
-print("PDF types " + ",".join(_c["type"] for _c in _r["columns"]))
+_r = oold_agent.doc_text("fixture_report.pdf")
+print("PDF ok " + str(_r["ok"]) + " format " + str(_r["format"]))
+print("PDF blocks " + ",".join(_b["where"] for _b in _r["blocks"]))
+print("PDF method " + str("read once per day at 08:00" in _r["text"]))
 
-import docx, pptx, pymupdf, xlsxwriter
+import docx, pptx, pypdf, xlsxwriter
 print("DOCX file " + docx.__file__)
 print("PPTX file " + pptx.__file__)
 print("XLSXWRITER file " + xlsxwriter.__file__)
-print("PYMUPDF file " + pymupdf.__file__)
+print("PYPDF file " + pypdf.__file__)
 
 _bad = oold_agent.doc_profile("fixture_corrupt.docx")
 print("CORRUPT ok " + str(_bad["ok"]) + " " + _bad["problems"][0].split(":")[0])
@@ -341,13 +355,13 @@ expectLine("doc_text reads a docx offline", documents, "DOCX text True");
 expectLine("doc_profile reads a pptx offline", documents, "PPTX ok True format pptx where slide 3");
 expectLine("doc_profile reads a pptx offline", documents, "PPTX columns sensor_id,value,unit");
 expectLine("doc_text reads a pptx offline", documents, "PPTX headings Sensor overview | Method | Readings");
-expectLine("doc_profile reads a pdf offline", documents, "PDF ok True format pdf where page 2");
-expectLine("doc_profile reads a pdf offline", documents, "PDF columns sensor id,value,unit");
-expectLine("doc_profile infers types from a pdf table offline", documents, "PDF types string,number,string");
+expectLine("doc_text reads a pdf offline", documents, "PDF ok True format pdf");
+expectLine("pdf text is located by page", documents, "PDF blocks page 1,page 2");
+expectLine("pdf text carries the methods section", documents, "PDF method True");
 expectLine("python-docx came from the site, not from PyPI", documents, "DOCX file /lib/python3.14/site-packages/docx/__init__.py");
 expectLine("python-pptx came from the site, not from PyPI", documents, "PPTX file /lib/python3.14/site-packages/pptx/__init__.py");
 expectLine("XlsxWriter came from the site, not from PyPI", documents, "XLSXWRITER file /lib/python3.14/site-packages/xlsxwriter/__init__.py");
-expectLine("pymupdf came from the Pyodide distribution", documents, "PYMUPDF file /lib/python3.14/site-packages/pymupdf/__init__.py");
+expectLine("pypdf came from the site, not from PyPI", documents, "PYPDF file /lib/python3.14/site-packages/pypdf/__init__.py");
 // The negative of the same question: the reader has to reject a file that is not one.
 expectLine("a corrupt document is still a problem, not a parse", documents, "CORRUPT ok False could not be read");
 
@@ -361,7 +375,7 @@ for _name in ("oold", "rdflib", "pyld", "SPARQLWrapper", "jsondiff", "datamodel-
               "fqdn", "isoduration", "rfc3339-validator", "rfc3986-validator", "rfc3987-syntax",
               "uri-template", "webcolors", "jsonschema", "referencing", "click", "typing-extensions",
               "python-calamine", "openpyxl", "et-xmlfile", "python-docx", "python-pptx",
-              "XlsxWriter", "pymupdf", "lxml", "pillow"):
+              "XlsxWriter", "pypdf", "lxml", "pillow"):
     try:
         print("DIST " + _name + " " + _md.version(_name))
     except Exception as _e:
@@ -393,7 +407,7 @@ for (const name of [
   "python-docx",
   "python-pptx",
   "XlsxWriter",
-  "pymupdf",
+  "pypdf",
 ]) {
   const line = lines(origins).find((l) => l.startsWith(`DIST ${name} `));
   check(`${name} is installed in the kernel`, !!line && !line.includes("MISSING"), line ?? "no DIST line");
