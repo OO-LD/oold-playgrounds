@@ -24,6 +24,10 @@ const AZURE_BASE_URL = "https://unit-test.invalid/openai";
 const AZURE_DEPLOYMENT = "gpt-4o-playground";
 const AZURE_API_VERSION = "2025-04-01-preview";
 const FOUNDRY_BASE_URL = "https://unit-test.invalid/anthropic/v1";
+// What a tenant's portal shows as the Anthropic endpoint. @ai-sdk/anthropic appends
+// "/messages", so without the /v1 the request lands on a path Azure answers with a 404
+// and no CORS headers, which the browser then reports as a cross-origin block.
+const FOUNDRY_ROOT_URL = "https://unit-test.invalid/anthropic";
 const FOUNDRY_MODEL = "claude-sonnet-4-5";
 const FOUNDRY_API_VERSION = "2024-12-01-preview";
 
@@ -329,7 +333,7 @@ check(
 // ---------------------------------------------- 5. request shape, offline
 section("TEST 5: request shape, captured through a stubbed fetch");
 const shapes = await page.evaluate(
-  async ({ token, azure, foundry }) => {
+  async ({ token, azure, foundry, foundryRoot }) => {
     const registry = await window.__service(token);
     const original = globalThis.fetch;
     const captured = [];
@@ -366,11 +370,14 @@ const shapes = await page.evaluate(
     const azureCaptured = captured.splice(0, captured.length);
     const foundryResult = await drive("azure-foundry-anthropic", foundry);
     const foundryCaptured = captured.splice(0, captured.length);
+    const rootResult = await drive("azure-foundry-anthropic", foundryRoot);
+    const rootCaptured = captured.splice(0, captured.length);
 
     globalThis.fetch = original;
     return {
       azure: { ...azureResult, requests: azureCaptured },
       foundry: { ...foundryResult, requests: foundryCaptured },
+      foundryRoot: { ...rootResult, requests: rootCaptured },
       fetchRestored: globalThis.fetch === original,
     };
   },
@@ -378,6 +385,7 @@ const shapes = await page.evaluate(
     token: REGISTRY_TOKEN,
     azure: { provider: "azure-openai", model: AZURE_DEPLOYMENT, apiKey: "test-key", baseURL: AZURE_BASE_URL },
     foundry: { provider: "azure-foundry-anthropic", model: FOUNDRY_MODEL, apiKey: "test-key", baseURL: FOUNDRY_BASE_URL },
+    foundryRoot: { provider: "azure-foundry-anthropic", model: FOUNDRY_MODEL, apiKey: "test-key", baseURL: FOUNDRY_ROOT_URL },
   }
 );
 report.requests = shapes;
@@ -417,6 +425,17 @@ if (foundryReq) {
     body = null;
   }
   check("foundry request body names the configured model", body?.model === FOUNDRY_MODEL, `model=${body?.model}`);
+}
+
+const rootReq = shapes.foundryRoot.requests[0];
+check("foundry accepts the /anthropic root as a base URL", shapes.foundryRoot.created === true, `error=${shapes.foundryRoot.error}`);
+check("a base URL without /v1 still issues a request", !!rootReq, rootReq ? rootReq.url : `error=${shapes.foundryRoot.error}`);
+if (rootReq) {
+  check(
+    "a base URL without /v1 is corrected to the route Foundry serves",
+    new URL(rootReq.url).pathname === "/anthropic/v1/messages",
+    rootReq.url
+  );
 }
 
 // ------------------------------------------------------ 6. negative control

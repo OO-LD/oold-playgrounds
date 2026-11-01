@@ -8,6 +8,19 @@ import {
 } from './config';
 
 /**
+ * Foundry serves the Anthropic messages API at `/anthropic/v1/messages`, and
+ * `@ai-sdk/anthropic` appends `/messages` to whatever base URL it is given, so
+ * the `/v1` has to be part of it. Entering the resource's `/anthropic` root is
+ * the obvious mistake: Azure answers the resulting path with a bare 404 that
+ * carries no CORS headers, which a browser reports as a blocked cross-origin
+ * request rather than as a wrong path.
+ */
+function foundryBaseUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  return /\/anthropic$/.test(trimmed) ? `${trimmed}/v1` : trimmed;
+}
+
+/**
  * Builds the Azure AI Foundry Anthropic provider entry, Anthropic-native wire
  * format rather than the OpenAI-compatible shim.
  *
@@ -45,7 +58,7 @@ export function createFoundryAnthropicProvider(
     },
     factory: (options: IModelOptions) => {
       const cfg = store.foundryAnthropic;
-      const baseURL = options.baseURL || cfg.baseUrl;
+      const baseURL = foundryBaseUrl(options.baseURL || cfg.baseUrl);
       if (!baseURL) {
         throw new Error(
           'Azure AI Foundry needs a base URL, for example https://<resource>.services.ai.azure.com/anthropic/v1'
