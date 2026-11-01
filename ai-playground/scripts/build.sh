@@ -18,6 +18,17 @@ fi
 # labextensions installed here.
 export PATH="$(dirname "$PY"):$PATH"
 
+# extension/pyproject.toml has no build hook: pip copies whatever extension/labextension
+# holds and never runs tsc. The bundle is tracked, so CI ships the committed one. An edit
+# under extension/src reaches the site only if something rebuilds it first, which is what
+# this does. Commit the rebuilt bundle with the sources or CI keeps serving the old one.
+EXT="$ROOT/extension"
+if [ -d "$EXT/node_modules" ] && [ -n "$(find "$EXT/src" "$EXT/package.json" -newer "$EXT/labextension" 2>/dev/null)" ]; then
+  echo "== rebuilding the provider extension =="
+  (cd "$EXT" && npm run build)
+  "$PY" -m pip install --quiet --force-reinstall --no-deps "$EXT"
+fi
+
 echo "== building oold wheel from $OOLD_SRC =="
 rm -f "$ROOT"/wheels/oold-*.whl
 (cd "$OOLD_SRC" && "$PY" -m build --wheel --no-isolation --outdir "$ROOT/wheels")
