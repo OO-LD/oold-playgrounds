@@ -11,7 +11,8 @@ framing = "brief/framing.md"
 closing = "brief/closing.md"
 
 [wheels]
-oold_src = "../../oold-python"
+# No oold_src: the released wheel is downloaded from PyPI. pages.yml exports OOLD_SRC so
+# the deployed page tracks the branch, and so does a local checkout that sets it.
 
 [extension]
 # Built from the sibling checkout, where its sources live.
