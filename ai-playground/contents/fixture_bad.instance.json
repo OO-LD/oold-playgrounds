@@ -1,8 +1,0 @@
-{
-  "$schema": "fixture_Measurement.schema.json",
-  "@context": "fixture_Measurement.schema.json",
-  "id": "ex:m-002",
-  "sensor_id": "S-12",
-  "value": "twenty-two",
-  "unit": "degC"
-}

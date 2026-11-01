@@ -1,7 +1,0 @@
-{
-  "LiteBuildConfig": {
-    "apps": ["lab"],
-    "no_unused_shared_packages": true,
-    "no_libarchive": true
-  }
-}

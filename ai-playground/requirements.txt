@@ -1,51 +1,13 @@
-# Build environment for the static JupyterLite AI playground.
+# Build environment for the playground.
 #
 #   python -m venv .venv
-#   .venv/bin/python -m pip install -r requirements.txt
+#   OOLD_AI_SRC=../../oold-jupyterlite-ai .venv/bin/python -m pip install -r requirements.txt
 #
-# jupyter-server is not a jupyterlite-core dependency but is required by the
-# contents addon, so --contents fails without it. hatchling is needed because
-# scripts/build.sh builds the oold wheel with --no-isolation.
-
-jupyterlite-core
-jupyterlite-pyodide-kernel
-jupyter-server
-
-build
-hatchling
-
-# scripts/resolve_wheels.py evaluates environment markers and wheel tags with it,
-# and pip downloads the vendored wheels listed in piplite-requirements.txt
-packaging
-pip
-
-# scripts/make_xlsx_fixtures.py writes the spreadsheet fixtures. xlwt is the only way
-# to produce the legacy .xls one; nothing at runtime uses either.
-openpyxl
-xlwt
-
-# scripts/make_doc_fixtures.py writes the document fixtures. docx and pptx are written with
-# the same libraries the kernel reads them back with, so a fixture cannot encode something
-# no reader produces. The pdfs are not: the kernel reads them with pypdf, which cannot write
-# one, so pymupdf authors them here and is never installed in the kernel.
-python-docx
-python-pptx
-pymupdf
-
-# Pinned exactly. jupyterlite-ai is young, its provider configuration is read
-# from docs rather than from a stable reference, and the plugin ids the test
-# suite asserts on move between releases. Bump deliberately, then re-run
-# tests/run.mjs.
-jupyterlite-ai==0.20.1
-./extension
-
-# shipped as labextensions so widget views render in the built site
-anywidget
-jupyterlab_widgets
-
-# ships @pyviz/jupyterlab_pyviz, which registers renderers for the two
-# application/vnd.holoviews_*.v0+json mimetypes holoviews and panel emit. Nothing else
-# renders them, so without it their output arrives as an empty cell. The kernel side is
-# not vendored: holoviews installs from PyPI on demand, against the bokeh the Pyodide
-# distribution already carries.
-pyviz_comms
+# The jupyterlite stack, the pinned vendored wheel set, the kernel API and the azure
+# provider extension are all owned by OO-LD/oold-jupyterlite-ai and built from a sibling
+# checkout, the same way the oold wheel is. Nothing is pinned here on purpose: one
+# resolution, in one repo, decides the Pyodide version the wheel set is pinned against.
+#
+# Editable, so an edit in the sibling checkout reaches the next build with no reinstall.
+-e ${OOLD_AI_SRC}[build]
+${OOLD_AI_SRC}/extension

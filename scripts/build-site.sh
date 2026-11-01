@@ -36,9 +36,8 @@ echo "== building jupyterlite =="
 (cd "$ROOT/jupyterlite" && env -u PY bash scripts/build.sh)
 
 echo "== building ai playground =="
-# Own venv for the same reason as jupyterlite, and it also puts that venv on PATH:
-# jupyter lite dispatches by PATH rather than by interpreter, so without it the
-# sibling jupyterlite venv builds a site with no jupyterlite-ai in it.
+# Own venv for the same reason as jupyterlite. The build itself is oold-jupyterlite-ai,
+# installed into that venv from a sibling checkout; this directory is only its config.
 (cd "$ROOT/ai-playground" && env -u PY bash scripts/build.sh)
 
 echo "== building landing page =="

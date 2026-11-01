@@ -1,5 +1,0 @@
-{
-  "packageManager": "python",
-  "packageName": "oold-azure-providers",
-  "uninstallInstructions": "Use pip to uninstall the package: pip uninstall oold-azure-providers"
-}

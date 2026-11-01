@@ -1,0 +1,18 @@
+# The public OO-LD schema agent. Everything the agent can do comes from
+# oold-jupyterlite-ai; this file is the whole of what makes the playground itself.
+
+[site]
+contents = ["contents"]
+apps = ["lab"]
+
+[agent]
+capabilities = ["validation", "tabular", "documents", "rdf", "git"]
+framing = "brief/framing.md"
+closing = "brief/closing.md"
+
+[wheels]
+oold_src = "../../oold-python"
+
+[extension]
+# Built from the sibling checkout, where its sources live.
+path = "../../oold-jupyterlite-ai/extension"
