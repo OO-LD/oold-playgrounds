@@ -257,6 +257,29 @@ check(
   `activated=${JSON.stringify(ai.activated)}`
 );
 
+// holoviews and panel emit their own mimetypes and nothing in a stock JupyterLite
+// renders them, so the output arrives as an empty cell. Asserting the registered
+// renderers rather than the plugin id: that is the part the output depends on.
+const pyviz = await page.evaluate(() => {
+  const app = window.jupyterapp;
+  const widget = app.shell.currentWidget;
+  const mimeTypes = widget?.content?.rendermime?.mimeTypes ?? [];
+  return {
+    plugin: app.listPlugins().filter((id) => id.startsWith("@pyviz/")),
+    holoviews: mimeTypes.filter((m) => m.startsWith("application/vnd.holoviews")),
+  };
+});
+report.pyviz = pyviz;
+console.log(`pyviz: ${JSON.stringify(pyviz)}`);
+check(
+  "pyviz labextension registered",
+  pyviz.plugin.includes("@pyviz/jupyterlab_pyviz:plugin"),
+  JSON.stringify(pyviz.plugin)
+);
+for (const mime of ["application/vnd.holoviews_load.v0+json", "application/vnd.holoviews_exec.v0+json"]) {
+  check(`${mime} has a renderer`, pyviz.holoviews.includes(mime), JSON.stringify(pyviz.holoviews));
+}
+
 // Relative URL on purpose: the site has to work from a subpath, which is what
 // GitHub Pages serves.
 const aiSettings = await page.evaluate(async () => {

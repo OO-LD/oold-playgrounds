@@ -55,10 +55,29 @@ it, so a sibling playground venv on `PATH` otherwise builds with its own
 There is no working incremental mode. `build.sh` removes `_output/` and
 `.jupyterlite.doit.db` on every run.
 
+`build.sh` rebuilds `extension/` when anything under `extension/src` is newer than the
+built bundle, because nothing else will. `extension/pyproject.toml` declares no build
+hook, only `shared-data`, so `pip install ./extension` copies whatever `labextension/`
+holds and never runs `tsc`. That directory is tracked, which means CI installs the
+committed bundle and never rebuilds it either. Commit the rebuilt bundle alongside the
+sources it came from, or the deployed site keeps serving the previous one.
+
 Do not pipe `build.sh` into `head`. The early pipe close kills the build mid-run and
 leaves a half-written `_output/` that still serves `lab/index.html` with HTTP 200 while
 `build/schemas/all_federated.json` and the contents index are missing. Redirect to a
 file instead.
+
+## Plot output
+
+`pyviz_comms` is installed for its `@pyviz/jupyterlab_pyviz` labextension, which registers
+renderers for `application/vnd.holoviews_load.v0+json` and
+`application/vnd.holoviews_exec.v0+json`. Those are what `holoviews` and `panel` emit, and
+nothing in a stock JupyterLite renders them, so their output arrives as an empty cell
+without it. `tests/run.mjs` asserts both renderers rather than the plugin id.
+
+The kernel side is not vendored. `await piplite.install("holoviews")` pulls it from PyPI
+on demand and binds to the `bokeh` the Pyodide distribution already carries, so plotting
+needs network while the rest of the playground does not.
 
 ## Vendored wheels
 
@@ -95,17 +114,21 @@ are in no distribution, are pure python and are vendored: without them nothing c
 an xlsx, and `DataFrame.to_excel` fails with `ModuleNotFoundError`. `xlrd` is in the
 distribution but is 2.x, reads `.xls` only and is not used.
 
-`python-docx` and `python-pptx` read the documents, are in no distribution, are pure
-python and are vendored. `XlsxWriter` is vendored for `python-pptx`, which requires it
-and is the only thing that does; micropip resolves the whole dependency set or none of
-it. `pymupdf` reads pdf text and locates pdf tables, and is in the distribution as a
-compiled wasm wheel, so it is installed by `setup()` like `python-calamine`.
+`python-docx`, `python-pptx` and `pypdf` read the documents, are in no distribution, are
+pure python and are vendored. `XlsxWriter` is vendored for `python-pptx`, which requires
+it and is the only thing that does; micropip resolves the whole dependency set or none of
+it.
 
-`pymupdf` is the largest single thing a cold start pulls: 17.3 MB from
-`cdn.jsdelivr.net/pyodide/v314.0.6/full/`, measured at 2.2 s of the 9.8 s `setup()` takes
-against a local server. The CDN serves it with `cache-control: public, max-age=31536000`,
-so a returning visitor with a warm HTTP cache pays nothing. `pypdf` would vendor as pure
-python at a fraction of that, and has no table extraction at all.
+`pypdf` extracts text and has no table detection. `pymupdf` has both, but is a 17.3 MB
+compiled wasm wheel that exists only in the Pyodide distribution, so it can only be
+fetched from `cdn.jsdelivr.net` at 2.2 s of a 9.8 s `setup()` on a cold cache, which is
+the one dependency the vendored set could not pull out of the network. The agent does the
+column detection instead, from the page text; `oold_agent.PDF_TABLE_HINT` is what tells it
+so, returned in `problems` whenever a pdf is asked for tables.
+
+The pdf fixtures are written with `pymupdf` in `scripts/make_doc_fixtures.py`, because
+`pypdf` cannot author one. That is a build dependency and is never installed in the
+kernel.
 
 ## Spreadsheet fixtures
 
@@ -263,10 +286,10 @@ Tier 1 is deterministic and has to pass before a merge. No suite needs a credent
 and none of them reaches a model provider.
 
 ```bash
-node tests/run.mjs          # 22 checks
+node tests/run.mjs          # 25 checks
 node tests/offline.mjs      # 79 checks
-node tests/kernel-api.mjs   # 236 checks
-node tests/providers.mjs    # 49 checks
+node tests/kernel-api.mjs   # 235 checks
+node tests/providers.mjs    # 52 checks
 node tests/git.mjs          # 54 checks
 node tests/agent-loop.mjs   # 59 checks
 ```

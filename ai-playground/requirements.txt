@@ -24,8 +24,10 @@ pip
 openpyxl
 xlwt
 
-# scripts/make_doc_fixtures.py writes the document fixtures with the same libraries the
-# kernel reads them back with, so a fixture cannot encode something no reader produces.
+# scripts/make_doc_fixtures.py writes the document fixtures. docx and pptx are written with
+# the same libraries the kernel reads them back with, so a fixture cannot encode something
+# no reader produces. The pdfs are not: the kernel reads them with pypdf, which cannot write
+# one, so pymupdf authors them here and is never installed in the kernel.
 python-docx
 python-pptx
 pymupdf
@@ -40,3 +42,10 @@ jupyterlite-ai==0.20.1
 # shipped as labextensions so widget views render in the built site
 anywidget
 jupyterlab_widgets
+
+# ships @pyviz/jupyterlab_pyviz, which registers renderers for the two
+# application/vnd.holoviews_*.v0+json mimetypes holoviews and panel emit. Nothing else
+# renders them, so without it their output arrives as an empty cell. The kernel side is
+# not vendored: holoviews installs from PyPI on demand, against the bokeh the Pyodide
+# distribution already carries.
+pyviz_comms
