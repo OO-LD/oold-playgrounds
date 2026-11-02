@@ -10,4 +10,7 @@
 #
 # Editable, so an edit in the sibling checkout reaches the next build with no reinstall.
 -e ${OOLD_AI_SRC}[build]
-${OOLD_AI_SRC}/extension
+
+# The provider extension is deliberately not here. Its wheel ships a prebuilt labextension
+# as shared-data and pip does not build it, so installing it before `npm run build` has run
+# would stage nothing. scripts/build.sh builds and installs it; CI does the same explicitly.

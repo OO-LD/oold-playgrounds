@@ -102,14 +102,19 @@ jobs:
           jupyterlite/.venv/bin/python -m pip install --quiet \
             -r jupyterlite/requirements.txt
           npm --prefix ai-playground ci
-          # pip does not build the labextension: `npm run build` shells out to
-          # jupyter-builder from the venv and pip's subprocess does not inherit it.
-          npm --prefix ../oold-jupyterlite-ai/extension ci
-          npm --prefix ../oold-jupyterlite-ai/extension run build
           python -m venv ai-playground/.venv
           OOLD_AI_SRC=$GITHUB_WORKSPACE/oold-jupyterlite-ai \
             ai-playground/.venv/bin/python -m pip install --quiet \
             -r ai-playground/requirements.txt
+          # After the venv and with it on PATH: `npm run build` shells out to
+          # jupyter-builder, a console script that the install above provides. pip does
+          # not build the labextension itself, under build isolation or without it, so
+          # the bundle has to exist before the extension is installed.
+          npm --prefix ../oold-jupyterlite-ai/extension ci
+          PATH="$GITHUB_WORKSPACE/playgrounds/ai-playground/.venv/bin:$PATH" \
+            npm --prefix ../oold-jupyterlite-ai/extension run build
+          ai-playground/.venv/bin/python -m pip install --quiet --no-deps \
+            ../oold-jupyterlite-ai/extension
 
       - name: Build site
         working-directory: playgrounds
