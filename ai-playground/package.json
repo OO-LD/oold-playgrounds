@@ -1,0 +1,14 @@
+{
+  "name": "oold-ai-playground",
+  "version": "1.0.0",
+  "description": "JupyterLite build with jupyterlite-ai and the oold wheel",
+  "private": true,
+  "license": "ISC",
+  "type": "commonjs",
+  "scripts": {
+    "smoke": "node tests/run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

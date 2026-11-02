@@ -1,0 +1,19 @@
+# The public OO-LD schema agent. Everything the agent can do comes from
+# oold-jupyterlite-ai; this file is the whole of what makes the playground itself.
+
+[site]
+contents = ["contents"]
+apps = ["lab"]
+
+[agent]
+capabilities = ["validation", "tabular", "documents", "rdf", "git"]
+framing = "brief/framing.md"
+closing = "brief/closing.md"
+
+[wheels]
+# No oold_src: the released wheel is downloaded from PyPI. pages.yml exports OOLD_SRC so
+# the deployed page tracks the branch, and so does a local checkout that sets it.
+
+[extension]
+# Built from the sibling checkout, where its sources live.
+path = "../../oold-jupyterlite-ai/extension"
