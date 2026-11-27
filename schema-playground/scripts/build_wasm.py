@@ -32,7 +32,7 @@ APP = ROOT / "app.py"
 #: branch (see pyproject.toml), which micropip cannot install, so its wheel is built locally
 #: and shipped beside the app's.
 REQUIREMENTS = [
-    "oold>=0.20",
+    "oold==2.3.3",
     "param",
     "pydantic",
     "pyld",
@@ -62,7 +62,45 @@ REQUIREMENTS = [
 
 #: Installed without their dependency lists (see the module docstring). Local wheels are
 #: added to this group by the patcher.
-NO_DEPS = ["oold>=0.20"]
+NO_DEPS = ["oold==2.3.3"]
+
+#: The PyPI side of the closure, pinned to a resolution verified in the browser. micropip
+#: takes the newest release that satisfies each requirement, and an unbounded requirement
+#: anywhere in the tree lets a release nobody here made take the page down. That happened:
+#: panel 1.9.4 asks for panel-material-ui>=0.10.0 with no upper bound, panel-material-ui
+#: 0.17.0 then required panel>=1.10.0, and the transaction failed as a whole, so panel
+#: never installed and the page died with ModuleNotFoundError.
+#:
+#: Passed as micropip constraints rather than requirements: a constraint pins a package if
+#: something asks for it, and adds nothing that nothing asks for. Packages from the Pyodide
+#: distribution are absent because the distribution version is already fixed by the pinned
+#: Pyodide release.
+#:
+#: To move: resolve in Pyodide with these lifted, check the app, write the new versions here.
+CONSTRAINTS = [
+    "arrow==1.4.0",
+    "bokeh==3.9.2",
+    "fqdn==1.6.0",
+    "frozendict==2.5.1",
+    "isoduration==20.11.0",
+    "jsonschema==4.26.0",
+    "lark==1.3.1",
+    "linkify-it-py==2.2.0",
+    "markdown==3.11.4",
+    "markdown-it-py==4.3.0",
+    "mdit-py-plugins==0.7.0",
+    "mdurl==0.1.2",
+    "panel-material-ui==0.16.7",
+    "param==2.5.0",
+    "pyld==3.3.0",
+    "pyviz-comms==3.0.6",
+    "rdflib==7.6.0",
+    "rfc3339-validator==0.1.4",
+    "rfc3986-validator==0.1.1",
+    "rfc3987-syntax==1.1.0",
+    "uri-template==1.3.0",
+    "webcolors==25.10.0",
+]
 
 PANELINI_REPO = "https://github.com/opensemanticworld/panelini.git"
 PANELINI_REF = "feat/monaco-schema-store-and-languages"
@@ -130,8 +168,18 @@ def patch_worker(worker: Path, wheel_names: list[str]) -> None:
         text = text.replace(broken.group(0), f"'bokeh=={broken.group(1)}'", 1)
         print(f"patched {worker.name}: bokeh {broken.group(1)} taken from PyPI, not the CDN")
 
+    # The second install is the one that resolves dependencies, so that is where the pins go.
+    # Matched on the line the deps=False insert above leaves behind, so a panel release that
+    # reshapes the generated worker fails the build instead of shipping unpinned.
+    resolving = re.search(r"(      await micropip\.install\(\[(?:(?!deps=False).)*?\])\);", text)
+    if resolving is None:
+        sys.exit(f"{worker.name}: no dependency-resolving micropip.install to attach constraints to")
+    pins = ", ".join(f"'{c}'" for c in CONSTRAINTS)
+    text = text.replace(resolving.group(0), f"{resolving.group(1)}, constraints=[{pins}]);", 1)
+
     worker.write_text(text, encoding="utf-8")
     print(f"patched {worker.name}: app wheel by URL; oold and panelini without their unused dependencies")
+    print(f"patched {worker.name}: {len(CONSTRAINTS)} constraints on the resolving install")
 
 
 #: Inserted after the live document is embedded. ``panel convert`` prerenders the app into
