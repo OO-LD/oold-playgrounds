@@ -1,0 +1,16 @@
+# Build environment for the playground.
+#
+#   python -m venv .venv
+#   OOLD_AI_SRC=../../oold-jupyterlite-ai .venv/bin/python -m pip install -r requirements.txt
+#
+# The jupyterlite stack, the pinned vendored wheel set, the kernel API and the azure
+# provider extension are all owned by OO-LD/oold-jupyterlite-ai and built from a sibling
+# checkout, the same way the oold wheel is. Nothing is pinned here on purpose: one
+# resolution, in one repo, decides the Pyodide version the wheel set is pinned against.
+#
+# Editable, so an edit in the sibling checkout reaches the next build with no reinstall.
+-e ${OOLD_AI_SRC}[build]
+
+# The provider extension is deliberately not here. Its wheel ships a prebuilt labextension
+# as shared-data and pip does not build it, so installing it before `npm run build` has run
+# would stage nothing. scripts/build.sh builds and installs it; CI does the same explicitly.

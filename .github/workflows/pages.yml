@@ -11,6 +11,9 @@ on:
       awl_ref:
         description: awl-python ref to build the wheel from
         default: feat/phase2-modules
+      jlai_ref:
+        description: oold-jupyterlite-ai ref to build the AI playground from
+        default: main
 
 permissions:
   contents: read
@@ -26,6 +29,9 @@ env:
   # The editor is not on awl-python's main yet, so the playground tracks the
   # branch it lives on. Move this to main when it lands there.
   AWL_REF: ${{ inputs.awl_ref || 'feat/phase2-modules' }}
+  # The AI playground is configuration only; its kernel API, provider extension and
+  # vendored wheel set come from here.
+  JLAI_REF: ${{ inputs.jlai_ref || 'main' }}
   # ty has no releases; pin the ruff commit so diagnostics do not move under us
   RUFF_REF: 2c3fa3e32f31cbb594f289e3a3e1bdc40de33262
 
@@ -52,6 +58,12 @@ jobs:
           repository: OO-LD/awl-python
           ref: ${{ env.AWL_REF }}
           path: awl-python
+
+      - uses: actions/checkout@v4
+        with:
+          repository: OO-LD/oold-jupyterlite-ai
+          ref: ${{ env.JLAI_REF }}
+          path: oold-jupyterlite-ai
 
       - uses: actions/setup-node@v4
         with:
@@ -89,6 +101,20 @@ jobs:
           python -m venv jupyterlite/.venv
           jupyterlite/.venv/bin/python -m pip install --quiet \
             -r jupyterlite/requirements.txt
+          npm --prefix ai-playground ci
+          python -m venv ai-playground/.venv
+          OOLD_AI_SRC=$GITHUB_WORKSPACE/oold-jupyterlite-ai \
+            ai-playground/.venv/bin/python -m pip install --quiet \
+            -r ai-playground/requirements.txt
+          # After the venv and with it on PATH: `npm run build` shells out to
+          # jupyter-builder, a console script that the install above provides. pip does
+          # not build the labextension itself, under build isolation or without it, so
+          # the bundle has to exist before the extension is installed.
+          npm --prefix ../oold-jupyterlite-ai/extension ci
+          PATH="$GITHUB_WORKSPACE/playgrounds/ai-playground/.venv/bin:$PATH" \
+            npm --prefix ../oold-jupyterlite-ai/extension run build
+          ai-playground/.venv/bin/python -m pip install --quiet --no-deps \
+            ../oold-jupyterlite-ai/extension
 
       - name: Build site
         working-directory: playgrounds
@@ -96,6 +122,7 @@ jobs:
           PY: ${{ github.workspace }}/playgrounds/.venv/bin/python
           OOLD_SRC: ${{ github.workspace }}/oold-python
           AWL_SRC: ${{ github.workspace }}/awl-python
+          OOLD_AI_SRC: ${{ github.workspace }}/oold-jupyterlite-ai
           # Built once above and cached; the awl playground copies it beside its
           # own page rather than building a second time.
           AWL_TY_WASM: ${{ github.workspace }}/playgrounds/ty-playground/ty_wasm

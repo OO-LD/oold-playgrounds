@@ -1,0 +1,15 @@
+node_modules/
+.venv/
+
+# jupyter lite build output, its staging tree and its doit state
+_output/
+.build/
+.cache/
+.jupyterlite.doit.db
+
+# wheels built from the local checkouts
+wheels/
+
+# playwright screenshots and json reports
+artifacts/
+build.log
