@@ -103,7 +103,11 @@ CONSTRAINTS = [
 ]
 
 PANELINI_REPO = "https://github.com/opensemanticworld/panelini.git"
-PANELINI_REF = "feat/monaco-schema-store-and-languages"
+#: A commit, not a branch. The branch this used to name was deleted when
+#: opensemanticworld/panelini#60 merged, and the build died on the clone. This is the head
+#: that shipped and that uv.lock resolves to; it is an ancestor of panelini main, so it
+#: stays reachable. Its MonacoEditor loads its JS bundle from its parent, a748bb7.
+PANELINI_REF = "38123add1831d68b935dcb12df7ae408f08262ee"
 
 
 def build_wheel() -> str:
@@ -116,7 +120,7 @@ def build_wheel() -> str:
 
 
 def build_panelini_wheel() -> str:
-    """Build a panelini wheel from the branch the app depends on, into the output directory.
+    """Build a panelini wheel from the commit the app depends on, into the output directory.
 
     Built rather than fetched: the MonacoEditor panel is not in a panelini release yet, and
     micropip cannot install from git.
@@ -127,9 +131,13 @@ def build_panelini_wheel() -> str:
     if existing:
         return existing[-1].name
     with tempfile.TemporaryDirectory() as workdir:
-        subprocess.check_call(  # noqa: S603,S607 - fixed command
-            ["git", "clone", "--depth", "1", "--branch", PANELINI_REF, PANELINI_REPO, workdir]
-        )
+        # clone --branch takes refs only, so a commit is fetched into an empty repository.
+        for command in (
+            ["git", "init", "--quiet", workdir],
+            ["git", "-C", workdir, "fetch", "--quiet", "--depth", "1", PANELINI_REPO, PANELINI_REF],
+            ["git", "-C", workdir, "checkout", "--quiet", "FETCH_HEAD"],
+        ):
+            subprocess.check_call(command)  # noqa: S603,S607 - fixed command
         subprocess.check_call(["uv", "build", "--wheel", "--out-dir", str(OUT)], cwd=workdir)  # noqa: S603,S607
     wheels = sorted(OUT.glob("panelini-*.whl"), key=lambda p: p.stat().st_mtime)
     if not wheels:
